@@ -1,0 +1,133 @@
+# ============================
+# Python 相关
+# ============================
+
+# 字节码编译文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 编译的C扩展
+*.so
+
+# 分发和打包文件
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ============================
+# 虚拟环境
+# ============================
+
+# 常见的虚拟环境目录
+venv/
+env/
+.venv/
+.env
+ENV/
+env.bak/
+venv.bak/
+
+# ============================
+# IDE 和编辑器
+# ============================
+
+# PyCharm
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*#
+.#*
+
+# ============================
+# macOS 系统文件
+# ============================
+
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ============================
+# 测试与覆盖率
+# ============================
+
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+# ============================
+# 日志和数据库
+# ============================
+
+*.log
+*.pid
+*.seed
+*.pid.lock
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================
+# 其他常见文件
+# ============================
+
+# 环境变量和密钥
+.env
+.env.local
+.env.*.local
+secrets.*
+config.local.*
+
+# Jupyter Notebooks (如果你不希望提交)
+.ipynb_checkpoints/
+
+# 临时文件
+*.tmp
+*.temp
+tmp/
+temp/
+
+# ============================
+# 自定义文件
+# ============================
+
+ROADMAP.md
+
+# 运行时产物（agent loop 日志 / session 持久化 / 本地数据目录）
+logs/
+.sessions/
+sessions/
+.data/
+
