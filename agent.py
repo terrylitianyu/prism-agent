@@ -196,6 +196,10 @@ def _find_tail_boundary(history: list, rounds: int) -> int:
     return 1  # fallback: 只保留 system prompt 作为 head
 
 
+class _SummarizeFailed(Exception):
+    """摘要生成失败的内部信号，触发 _compress_context 的降级通道。"""
+
+
 def _summarize_messages(messages: list) -> str:
     """调用轻量模型对中间消息生成结构化摘要。"""
     # 构建摘要输入
@@ -226,13 +230,25 @@ def _summarize_messages(messages: list) -> str:
         {"role": "user", "content": summary_text},
     ]
 
-    resp = call_llm(
-        messages=prompt,
-        model=MODELS.get("intent", MODELS["orchestrator"]),
-        temperature=0.2,
-        max_tokens=1024,
-    )
-    return resp.get("content", "（摘要生成失败）")
+    # 摘要模型可在 agent.yaml 的 loop.summary_model 配置，默认用轻量模型
+    summary_model = _loop_config.get("summary_model") or MODELS.get("intent", MODELS["orchestrator"])
+    try:
+        resp = call_llm(
+            messages=prompt,
+            model=summary_model,
+            temperature=0.2,
+            max_tokens=1024,
+        )
+    except Exception as e:
+        # call_llm 自身的 try 覆盖不到的路径（如客户端构造失败）
+        raise _SummarizeFailed(f"call_llm raised: {e}")
+
+    content = (resp.get("content") or "").strip()
+    # call_llm 失败时不抛异常，而是把 "[LLM Error: ...]" 放在 content 里返回，
+    # 必须显式检测——否则错误文本会被当成摘要注入上下文（静默污染）
+    if not content or content.startswith("[LLM Error:"):
+        raise _SummarizeFailed(content or "empty summary returned")
+    return content
 
 
 def _compress_context(conversation_history: list) -> list:
@@ -268,19 +284,49 @@ def _compress_context(conversation_history: list) -> list:
     middle = conversation_history[1:tail_start]
 
     if not middle:
-        return conversation_history
+        # 无 middle 可压，但仍可能超限 —— 跳过摘要，直接进入 Step 4 兜底截断
+        compressed = conversation_history
+    else:
+        # Step 3: 优先 LLM 摘要；失败则降级为"丢弃 middle + 占位说明"（双通道降级）
+        _loop_logger.debug(
+            f"[COMPRESS] Summarizing {len(middle)} middle messages "
+            f"(keeping {len(tail)} tail messages)."
+        )
+        try:
+            summary = _summarize_messages(middle)
+            note = f"[Context Summary]\n{summary}"
+        except _SummarizeFailed as e:
+            _loop_logger.warning(
+                f"[COMPRESS] Summarization failed ({e}); "
+                f"falling back to dropping middle messages."
+            )
+            logger.warning(f"Context summarization failed, degraded to dropping middle: {e}")
+            note = "[Context Summary]\n(早期对话因上下文超限被省略，摘要生成失败)"
+        compressed = head + [{"role": "system", "content": note}] + tail
 
-    # Step 3: Summarize middle
-    _loop_logger.debug(
-        f"[COMPRESS] Summarizing {len(middle)} middle messages "
-        f"(keeping {len(tail)} tail messages)."
-    )
-    summary = _summarize_messages(middle)
-    compressed = head + [{"role": "system", "content": f"[Context Summary]\n{summary}"}] + tail
+    # Step 4: 兜底——压缩后仍超阈值时，从最老的 tail 消息开始丢弃
+    new_tokens = sum(estimate_tokens(m.get("content") or "") for m in compressed)
+    if new_tokens >= TOKEN_THRESHOLD:
+        _loop_logger.warning(
+            f"[COMPRESS] Still over threshold ({new_tokens} >= {TOKEN_THRESHOLD}); "
+            f"hard-truncating oldest messages."
+        )
+        compressed = _hard_truncate_oldest(compressed)
+        new_tokens = sum(estimate_tokens(m.get("content") or "") for m in compressed)
 
-    new_tokens = sum(estimate_tokens(m.get("content", "")) for m in compressed)
     _loop_logger.debug(f"[COMPRESS] Done: {total_tokens} -> {new_tokens} tokens.")
     return compressed
+
+
+def _hard_truncate_oldest(messages: list) -> list:
+    """最终兜底：保留头部（system + 摘要说明）和最新消息，从最老的 tail 消息开始丢，
+    直到估算 tokens 低于阈值。不抛异常；最少保留 3 条（system、摘要说明、最新一条）。"""
+    result = list(messages)
+    while len(result) > 3 and sum(
+        estimate_tokens(m.get("content") or "") for m in result
+    ) >= TOKEN_THRESHOLD:
+        del result[2]  # 丢弃最老的 tail 消息（0=system prompt, 1=摘要说明）
+    return result
 
 
 # =============================================================================
