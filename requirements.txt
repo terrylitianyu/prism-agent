@@ -2,3 +2,4 @@ openai>=1.0.0
 PyYAML>=6.0
 json-repair>=0.25.0
 python-dotenv>=1.0.0
+flask>=3.0.0  # 仅 demo_server.py(Web demo)需要;框架内核不依赖

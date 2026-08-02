@@ -13,6 +13,7 @@ This repository contains no business logic — only the framework kernel and thr
 - [Project Layout](#project-layout)
 - [Installation & Configuration](#installation--configuration)
 - [Quickstart: Wire Up a New Agent in 5 Minutes](#quickstart-wire-up-a-new-agent-in-5-minutes)
+- [Example Agent: textcraft Demo](#example-agent-textcraft-demo)
 - [Skill Directory Conventions (Anthropic Skill-Compatible)](#skill-directory-conventions-anthropic-skill-compatible)
 - [The Adapter Layer in Detail](#the-adapter-layer-in-detail)
 - [SKILL.yaml / SKILL.md / SYSTEM.md Conventions](#skillyaml--skillmd--systemmd-conventions)
@@ -71,7 +72,7 @@ prism_agent/
 pip install -r requirements.txt
 ```
 
-Only four runtime dependencies: `openai` (LLM calls), `pyyaml` (SKILL.yaml / agent.yaml parsing), `json-repair` (tolerant parsing of LLM JSON output), `python-dotenv` (.env config loading).
+Only four runtime dependencies: `openai` (LLM calls), `pyyaml` (SKILL.yaml / agent.yaml parsing), `json-repair` (tolerant parsing of LLM JSON output), `python-dotenv` (.env config loading). `requirements.txt` additionally lists `flask` — only used by the web demo ([demo_server.py](demo_server.py)), not by the framework kernel.
 
 ### 2. Configure the LLM endpoint
 
@@ -89,7 +90,7 @@ API_KEY=your-api-key
 
 You can also `export` system environment variables instead — existing variables take precedence over the `.env` file.
 
-Model aliases (`orchestrator` / `intent`) can be overridden per agent in the `models` section of `agent.yaml` — see [The Adapter Layer in Detail](#the-adapter-layer-in-detail).
+Model aliases can be overridden per agent in the `models` section of `agent.yaml`: the framework ships the `orchestrator` fallback, and a skill may declare its own alias by name — see [The Adapter Layer in Detail](#the-adapter-layer-in-detail) and the FAQ.
 
 ---
 
@@ -172,14 +173,14 @@ skill_dirs:
   - skills/my_agent
 
 models:
-  orchestrator: "deepseek-v4-flash"
-  intent: "deepseek-v4-flash"
+  orchestrator: "deepseek-v4-flash"        # global fallback model
+  # <skill_name>: "deepseek-v4-flash"      # optional: per-skill model, referenced via get_model("<skill_name>") in handlers
 
 loop:
   max_iterations: 10
   temperature: 0.3
   max_tokens: 4096
-  # summary_model: "deepseek-v4-flash"   # optional: model for context-compression summaries (defaults to models.intent)
+  # summary_model: "deepseek-v4-flash"   # optional: model for context-compression summaries (defaults to models.orchestrator)
 ```
 
 [adapters/my_agent/translate.py](adapters/):
@@ -259,6 +260,39 @@ for event in agent.agent_loop_stream("Please translate it to English", conversat
 ```
 
 That's a minimal working agent. The next section explains the Adapter layer in depth.
+
+---
+
+## Example Agent: textcraft Demo
+
+The repo ships a complete, runnable example agent **textcraft** (document processing: type classification + type-specific structured summaries) that exercises every convention in this README:
+
+```
+skills/textcraft/doc_summary/     # skill (two tools: classify_document / generate_summary)
+skills/textcraft/orchestrator/    # SYSTEM.md (orchestration instructions)
+adapters/textcraft/               # agent.yaml + two adapters
+agents/textcraft.py               # agent entry
+demo_cli.py                       # interactive CLI
+demo_server.py + demo_web/        # web demo (Flask + single-page frontend)
+```
+
+Design notes: after the user uploads a document, `classify_document` only classifies a **sample** (first 3000 chars — cheap), persisting `doc_type` to the DataStore; `generate_summary` reads the shared `doc_type` and produces a type-specific structured summary (paper / novel / news / general), classifying inline as a fallback when needed. If the user uploads without giving an instruction, the agent only reports the detected type and asks what to do next — it does not summarize unprompted.
+
+**Run the CLI**:
+
+```bash
+python demo_cli.py
+# then: /upload your_doc.txt   → the agent reports the type and asks your intent
+# then: give me a summary      → structured summary
+# (/state shows the DataStore, /new starts a fresh session, /quit exits)
+```
+
+**Run the web demo** (requires flask):
+
+```bash
+python demo_server.py   # → http://127.0.0.1:5057
+# pick an agent, click to upload, chat with streamed events
+```
 
 ---
 
@@ -559,13 +593,13 @@ name: writer_agent
 skill_dirs:
   - skills/writer_agent
 models:
-  orchestrator: "deepseek-v4-flash"
-  intent: "deepseek-v4-flash"
+  orchestrator: "deepseek-v4-flash"        # global fallback model
+  # <skill_name>: "deepseek-v4-flash"      # optional: per-skill model, referenced via get_model("<skill_name>") in handlers
 loop:
   max_iterations: 15
   temperature: 0.3
   max_tokens: 4096
-  # summary_model: "deepseek-v4-flash"   # optional: model for context-compression summaries (defaults to models.intent)
+  # summary_model: "deepseek-v4-flash"   # optional: model for context-compression summaries (defaults to models.orchestrator)
 ```
 
 **adapters/writer_agent/summary.py**:
@@ -721,7 +755,7 @@ A: Not recommended — the convention is one adapter per skill. If different too
 A: No. `SQLiteDataStore` automatically runs `ALTER TABLE ADD COLUMN` the first time you call `set_field(session_id, "any_field", value)` (see [data_store.py:86](data_store.py#L86)). All field values are stored as JSON strings.
 
 **Q: How do I change the model aliases in MODELS?**
-A: Declare them in the `models` section of `agent.yaml`; `init_agent` calls `client.configure_models(...)` to override the defaults. Handlers reference them via `MODELS["orchestrator"]` / `MODELS["intent"]` — the concrete values are exactly what you configured there.
+A: The framework ships exactly one built-in alias: the `orchestrator` fallback. Convention: **a skill uses its own name as its alias** — handlers call `get_model("doc_summary")` (which falls back to `orchestrator` when unconfigured); a same-named key in the `models` section of `agent.yaml` becomes that skill's dedicated model. At startup, `init_agent` calls `client.configure_models(...)` to merge the section into MODELS. See [adapters/textcraft/agent.yaml](adapters/textcraft/agent.yaml).
 
 **Q: When does context compression trigger?**
 A: At the start of every loop iteration the framework estimates tokens; beyond `core.TOKEN_THRESHOLD` (default 80k) it (1) prunes oversized tool outputs, then (2) summarizes the middle messages with a lightweight model. No manual intervention needed.

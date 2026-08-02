@@ -1,0 +1,19 @@
+name: doc_summary
+description: "文档摘要：类型识别（论文/小说/新闻/其他）+ 按类型的结构化摘要提取"
+
+tools:
+  - name: classify_document
+    handler: handlers.tool_classify_document
+    description: "识别当前文档的类型（论文 paper / 小说 novel / 新闻 news / 其他 general）。用户上传或粘贴新文档后、且未给出明确指令时调用：只需采样，成本低。调用后告知用户识别结果并询问下一步意图。"
+    inputs:
+      document_text: str
+    output: dict
+
+  - name: generate_summary
+    handler: handlers.tool_generate_summary
+    description: "按文档类型生成结构化摘要。若尚未识别类型会自动先分类。调用前必须先让用户上传或粘贴文档。"
+    inputs:
+      document_text: str
+      doc_type: str
+      focus: str
+    output: dict

@@ -230,8 +230,8 @@ def _summarize_messages(messages: list) -> str:
         {"role": "user", "content": summary_text},
     ]
 
-    # 摘要模型可在 agent.yaml 的 loop.summary_model 配置，默认用轻量模型
-    summary_model = _loop_config.get("summary_model") or MODELS.get("intent", MODELS["orchestrator"])
+    # 摘要模型可在 agent.yaml 的 loop.summary_model 配置，默认用兜底模型
+    summary_model = _loop_config.get("summary_model") or MODELS["orchestrator"]
     try:
         resp = call_llm(
             messages=prompt,

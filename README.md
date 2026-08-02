@@ -13,6 +13,7 @@
 - [目录结构](#目录结构)
 - [安装与配置](#安装与配置)
 - [快速上手：5 分钟接入一个新 Agent](#快速上手5-分钟接入一个新-agent)
+- [示例 Agent：textcraft 演示](#示例-agenttextcraft-演示)
 - [Skill 目录约定（Anthropic Skill 兼容）](#skill-目录约定anthropic-skill-兼容)
 - [Adapter 详细指南](#adapter-详细指南)
 - [SKILL.yaml / SKILL.md / SYSTEM.md 约定](#skillyaml--skillmd--systemmd-约定)
@@ -71,7 +72,7 @@ prism_agent/
 pip install -r requirements.txt
 ```
 
-运行时依赖只有四个：`openai`（LLM 调用）、`pyyaml`（SKILL.yaml / agent.yaml 解析）、`json-repair`（LLM JSON 输出容错）、`python-dotenv`（.env 配置加载）。
+运行时依赖只有四个：`openai`（LLM 调用）、`pyyaml`（SKILL.yaml / agent.yaml 解析）、`json-repair`（LLM JSON 输出容错）、`python-dotenv`（.env 配置加载）。另外 `requirements.txt` 还包含 `flask`——仅供 Web demo（[demo_server.py](demo_server.py)）使用，框架内核不依赖。
 
 ### 2. 配置 LLM 端点
 
@@ -89,7 +90,7 @@ API_KEY=your-api-key
 
 也可以直接 `export` 系统环境变量——已存在的环境变量优先于 `.env` 文件。
 
-模型别名（`orchestrator` / `intent`）在 `agent.yaml` 的 `models` 段按需覆盖，见下文 [Adapter 详细指南](#adapter-详细指南)。
+模型别名在 `agent.yaml` 的 `models` 段按需覆盖：框架内置 `orchestrator` 兜底，skill 可按自己的名字声明专用别名（见下文 [Adapter 详细指南](#adapter-详细指南) 与 FAQ）。
 
 ---
 
@@ -172,14 +173,14 @@ skill_dirs:
   - skills/my_agent
 
 models:
-  orchestrator: "deepseek-v4-flash"
-  intent: "deepseek-v4-flash"
+  orchestrator: "deepseek-v4-flash"        # 全局兜底模型
+  # <skill_name>: "deepseek-v4-flash"      # 可选:某 skill 的专用模型,handler 里用 get_model("<skill_name>") 引用
 
 loop:
   max_iterations: 10
   temperature: 0.3
   max_tokens: 4096
-  # summary_model: "deepseek-v4-flash"   # 可选:上下文压缩用的摘要模型,默认取 models.intent
+  # summary_model: "deepseek-v4-flash"   # 可选:上下文压缩用的摘要模型,默认取 models.orchestrator
 ```
 
 [adapters/my_agent/translate.py](adapters/):
@@ -259,6 +260,39 @@ for event in agent.agent_loop_stream("请把它翻译成英文", conversation_hi
 ```
 
 到这里，一个最小可用的 Agent 就跑通了。下一节详细讲 Adapter。
+
+---
+
+## 示例 Agent：textcraft 演示
+
+仓库内置了一个完整可跑的示例 agent **textcraft**（文档处理：类型识别 + 按类型的结构化摘要），覆盖本 README 的全部约定，可直接运行体验：
+
+```
+skills/textcraft/doc_summary/     # skill(两个 tool:classify_document / generate_summary)
+skills/textcraft/orchestrator/    # SYSTEM.md(编排指令)
+adapters/textcraft/               # agent.yaml + 两个 adapter
+agents/textcraft.py               # agent 入口
+demo_cli.py                       # 交互式 CLI
+demo_server.py + demo_web/        # Web demo(Flask + 单页前端)
+```
+
+设计要点:用户上传文档后,`classify_document` 只做**采样分类**(前 3000 字符,低成本),识别结果 `doc_type` 落库;`generate_summary` 从 DataStore 读取共享的 `doc_type`,生成类型专属的结构化摘要(论文/小说/新闻/其他),未分类时自动兜底。上传后没有指令时,agent 只告知类型并询问意图,不会直接生成摘要。
+
+**跑 CLI**:
+
+```bash
+python demo_cli.py
+# 然后输入: /upload your_doc.txt   → agent 识别类型并询问下一步
+# 再输入:   帮我生成摘要           → 结构化摘要
+# (/state 查看 DataStore,/new 新会话,/quit 退出)
+```
+
+**跑 Web**(需要 flask):
+
+```bash
+python demo_server.py   # → http://127.0.0.1:5057
+# 页面里选 agent、点击上传、流式聊天
+```
 
 ---
 
@@ -559,13 +593,13 @@ name: writer_agent
 skill_dirs:
   - skills/writer_agent
 models:
-  orchestrator: "deepseek-v4-flash"
-  intent: "deepseek-v4-flash"
+  orchestrator: "deepseek-v4-flash"        # 全局兜底模型
+  # <skill_name>: "deepseek-v4-flash"      # 可选:某 skill 的专用模型,handler 里用 get_model("<skill_name>") 引用
 loop:
   max_iterations: 15
   temperature: 0.3
   max_tokens: 4096
-  # summary_model: "deepseek-v4-flash"   # 可选:上下文压缩用的摘要模型,默认取 models.intent
+  # summary_model: "deepseek-v4-flash"   # 可选:上下文压缩用的摘要模型,默认取 models.orchestrator
 ```
 
 **adapters/writer_agent/summary.py**：
@@ -721,7 +755,7 @@ A: 不建议。约定一个 skill 一个 adapter。如果不同工具需要不�
 A: 不需要。`SQLiteDataStore` 会在你第一次 `set_field(session_id, "any_field", value)` 时自动 `ALTER TABLE ADD COLUMN`（见 [data_store.py:86](data_store.py#L86)）。所有字段值都以 JSON 字符串存储。
 
 **Q: MODELS 里的模型别名怎么改？**
-A: 在 `agent.yaml` 的 `models` 段声明，`init_agent` 会调 `client.configure_models(...)` 覆盖默认表。Handler 里用 `MODELS["orchestrator"]` / `MODELS["intent"]` 引用，具体值就是这里配置的。
+A: 框架只内置一个兜底别名 `orchestrator`。约定：**skill 用自己的名字作别名**——handler 里 `get_model("doc_summary")`（未配置时自动兜底 orchestrator）；在 `agent.yaml` 的 `models` 段配置同名 key，即为该 skill 的专用模型。`init_agent` 启动时调 `client.configure_models(...)` 把 models 段合并进 MODELS 表。参考 [adapters/textcraft/agent.yaml](adapters/textcraft/agent.yaml)。
 
 **Q: 上下文压缩怎么触发？**
 A: 每轮 loop 开始前会估算 tokens，超过 `core.TOKEN_THRESHOLD`（默认 80k）就会：(1) 裁剪超长 tool output；(2) 用轻量模型对中间消息做结构化摘要。你不需要手动干预。

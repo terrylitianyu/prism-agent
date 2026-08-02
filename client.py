@@ -27,11 +27,17 @@ load_dotenv(WORKDIR / ".env")
 API_BASE = os.environ.get("API_BASE", "")
 API_KEY = os.environ.get("API_KEY", "")
 
-# Default model mapping — overridden by agent.yaml `models` section at init time
+# Default model mapping — overridden by agent.yaml `models` section at init time.
+# 约定:orchestrator 是全局兜底模型;skill 以自己的名字作为别名(见 get_model),
+# 在 agent.yaml 的 models 段配置同名 key,即为该 skill 的专用模型。
 MODELS = {
     "orchestrator": "deepseek-v4-flash",
-    "intent": "deepseek-v4-flash",
 }
+
+
+def get_model(alias: str) -> str:
+    """按别名取模型;未配置时兜底 orchestrator。skill 约定用自己的名字作别名。"""
+    return MODELS.get(alias) or MODELS["orchestrator"]
 
 
 def configure_models(models_config: dict):

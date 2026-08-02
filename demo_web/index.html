@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prism Agent Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #f5f6f8; height: 100vh; display: flex; flex-direction: column; }
+  header { background: #fff; border-bottom: 1px solid #e4e7ec; padding: 10px 16px;
+           display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header .logo { font-weight: 700; font-size: 16px; }
+  header select { padding: 6px 10px; border: 1px solid #d0d5dd; border-radius: 6px; }
+  .btn { padding: 6px 14px; background: #444ce7; color: #fff; border: none;
+         border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .btn:hover { background: #3538cd; }
+  #state-bar { display: flex; gap: 8px; margin-left: auto; font-size: 12px; }
+  .chip { background: #eef0ff; color: #3538cd; padding: 4px 10px; border-radius: 999px; }
+  .chip.off { background: #f2f4f7; color: #98a2b3; }
+  #messages { flex: 1; overflow-y: auto; padding: 20px 16px; display: flex;
+              flex-direction: column; gap: 10px; max-width: 860px; width: 100%;
+              margin: 0 auto; }
+  .msg { max-width: 78%; padding: 10px 14px; border-radius: 12px; line-height: 1.6;
+         white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+  .msg.user { align-self: flex-end; background: #444ce7; color: #fff; }
+  .msg.agent { align-self: flex-start; background: #fff; border: 1px solid #e4e7ec; }
+  .evt { align-self: center; font-size: 12px; color: #667085; background: #fff;
+         border: 1px dashed #d0d5dd; padding: 4px 12px; border-radius: 999px; }
+  .evt.instant { color: #067647; border-color: #a6f4c5; background: #ecfdf3; }
+  .evt.error { color: #b42318; border-color: #fecdca; background: #fef3f2; }
+  .evt.usage { color: #98a2b3; border: none; background: none; }
+  #input-bar { background: #fff; border-top: 1px solid #e4e7ec; padding: 12px 16px; }
+  #input-row { display: flex; gap: 10px; max-width: 860px; margin: 0 auto; }
+  #msg-input { flex: 1; padding: 10px 14px; border: 1px solid #d0d5dd;
+               border-radius: 8px; font-size: 14px; outline: none; }
+  #msg-input:focus { border-color: #444ce7; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">◈ Prism Agent</span>
+  <select id="agent-select"></select>
+  <label class="btn" for="file-input">📎 上传文档</label>
+  <input type="file" id="file-input" hidden>
+  <div id="state-bar">
+    <span class="chip off" id="chip-doc">未上传</span>
+    <span class="chip off" id="chip-type">未识别</span>
+    <span class="chip off" id="chip-summary">未摘要</span>
+  </div>
+</header>
+<div id="messages"></div>
+<div id="input-bar">
+  <div id="input-row">
+    <input id="msg-input" placeholder="输入消息,回车发送…" autofocus>
+    <button class="btn" id="send-btn">发送</button>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const messages = $("messages");
+let sending = false;
+
+function addMsg(role, text) {
+  const div = document.createElement("div");
+  div.className = `msg ${role}`;
+  div.textContent = text;
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+  return div;
+}
+
+function addEvt(text, cls = "") {
+  const div = document.createElement("div");
+  div.className = `evt ${cls}`;
+  div.textContent = text;
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+async function loadAgents() {
+  const r = await fetch("/api/agents").then(r => r.json());
+  const sel = $("agent-select");
+  sel.innerHTML = "";
+  for (const name of r.agents) {
+    const opt = document.createElement("option");
+    opt.value = opt.textContent = name;
+    if (name === r.current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  refreshState();
+}
+
+async function selectAgent() {
+  const name = $("agent-select").value;
+  await fetch("/api/select", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({agent: name}),
+  });
+  messages.innerHTML = "";
+  addEvt(`已切换到 agent: ${name}`);
+  refreshState();
+}
+
+async function uploadFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  const r = await fetch("/api/upload", {method: "POST", body: fd}).then(r => r.json());
+  if (r.ok) {
+    addEvt(`📎 已上传 ${r.filename}(${r.chars} 字符)`);
+    refreshState();
+    sendMessage("我上传了一份文档");  // 复现"上传无指令"场景
+  } else {
+    addEvt(`上传失败: ${r.error}`, "error");
+  }
+  e.target.value = "";
+}
+
+async function refreshState() {
+  const s = await fetch("/api/state").then(r => r.json());
+  setChip("chip-doc", s.document_chars ? `文档 ${s.document_chars} 字符` : "未上传", !!s.document_chars);
+  setChip("chip-type", s.doc_type_label || "未识别", !!s.doc_type);
+  setChip("chip-summary", s.has_summary ? "已摘要" : "未摘要", !!s.has_summary);
+}
+
+function setChip(id, text, on) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = on ? "chip" : "chip off";
+}
+
+async function sendMessage(preset) {
+  if (sending) return;
+  const input = $("msg-input");
+  const text = preset || input.value.trim();
+  if (!text) return;
+  if (!preset) input.value = "";
+  addMsg("user", text);
+  sending = true;
+
+  try {
+    const resp = await fetch("/api/chat", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({message: text}),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!chunk.startsWith("data: ")) continue;
+        const evt = JSON.parse(chunk.slice(6));
+        renderEvent(evt);
+      }
+    }
+  } catch (err) {
+    addEvt(`请求失败: ${err.message}`, "error");
+  }
+  sending = false;
+  refreshState();
+}
+
+function renderEvent(evt) {
+  const {event, data} = evt;
+  if (event === "tool_call") {
+    const args = Object.entries(data.args || {}).map(([k, v]) => `${k}=${v}`).join(", ");
+    addEvt(`🔧 ${data.name}(${args})`);
+  } else if (event === "instant_reply") {
+    addEvt(`⚡ ${data}`, "instant");
+  } else if (event === "done") {
+    addMsg("agent", data);
+  } else if (event === "error") {
+    addEvt(`❌ ${data}`, "error");
+  } else if (event === "usage") {
+    addEvt(`tokens: ${data.total_tokens}`, "usage");
+  }
+}
+
+$("agent-select").addEventListener("change", selectAgent);
+$("file-input").addEventListener("change", uploadFile);
+$("send-btn").addEventListener("click", () => sendMessage());
+$("msg-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendMessage();
+});
+
+loadAgents();
+</script>
+</body>
+</html>

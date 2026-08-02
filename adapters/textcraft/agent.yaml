@@ -1,0 +1,13 @@
+name: textcraft
+
+skill_dirs:
+  - skills/textcraft
+
+models:
+  orchestrator: "deepseek-v4-flash"
+  doc_summary: "deepseek-v4-flash"   # doc_summary skill 专用(分类/摘要共用);不配则兜底 orchestrator
+
+loop:
+  max_iterations: 10
+  temperature: 0.3
+  max_tokens: 4096
