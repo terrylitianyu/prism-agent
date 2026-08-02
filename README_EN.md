@@ -3,12 +3,43 @@
 > **English** | [中文](README.md)
 
 An application-agnostic agent framework skeleton: Agent Loop + DataStore + Skill/Adapter assembly layer.
-This repository contains no business logic — only the framework kernel and three empty directories ([adapters/](adapters/), [agents/](agents/), [skills/](skills/)). Follow the guide below to plug in your own business.
+The repo ships the framework kernel plus a complete, runnable example agent (textcraft — demo below). Run it, then follow the guide to plug in your own business.
+
+---
+
+## Why Prism Agent
+
+- **Skill ↔ data decoupling that actually holds up** — many frameworks claim it; here you can verify it: in the textcraft demo the LLM literally issues `classify_document({})`, a zero-argument call. The LLM only decides *whether* to call — the document never passes through the LLM context; data flows between tools via the DataStore. Swap the Adapter and the same Skill runs on a different store.
+- **Declarative contracts (SKILL.yaml)** — every tool's inputs / outputs / parameter sources are explicitly declared. The interface is the documentation; the LLM never guesses parameters — the prerequisite for platform-level skill validation and auto-wiring.
+- **Anthropic Skill-compatible** — not "yet another LangGraph": a runtime wiring layer for the standard skill format (`SKILL.md` + `scripts/`). External skills drop in with zero changes to `scripts/`; strip the Adapter and a local skill exports as a pure Anthropic Skill.
+- **Lightweight but not a toy** — a ~1,800-line kernel across 8 files with only 4 runtime dependencies, readable in an afternoon — yet with production-grade fallbacks built in (three-level context-compression degradation, full exception boundaries around the Adapter layer), plus a complete runnable textcraft demo (CLI + web).
+
+---
+
+## Why not LangChain?
+
+If you've had enough of stacked abstractions and "magic tuning", this is the opposite extreme. Prism Agent's core assumption is simple:
+
+> **A Skill is pure business logic** — it shouldn't know it's being invoked by an agent, and shouldn't know Session or DataStore exist: inputs arrive as parameters, outputs leave as return values.
+>
+> The loop, session, and DataStore are infrastructure; Skills are pure functions; the Adapter is the only glue.
+
+| Dimension | LangChain / LangGraph | Prism Agent |
+|-----------|-----------------------|-------------|
+| Positioning | Full-featured orchestration framework / graph runtime | Lightweight skeleton: loop + DataStore + assembly layer |
+| Abstraction | Layer upon layer (Chain / Runnable / LCEL...); behavior hides inside the framework | A ~1,800-line kernel straight to the LLM API — readable in an afternoon, no magic |
+| Skill shape | Tools scattered in code, coupled to the framework | Directory-level skills (`SKILL.md` + `scripts/`) aligned with Anthropic's format — lift the whole directory out as-is |
+| Data flow | State passed implicitly between chain/graph nodes | Explicit DataStore + Adapter wiring; the LLM context is never a data bus |
+| Dependencies | A large dependency tree | 4 runtime dependencies |
+
+This isn't "LangChain is bad" — it's a reasonable choice when you need its ecosystem integrations. Prism Agent is for people who want **full control over the agent loop** and want skills to be **portable assets**.
 
 ---
 
 ## Table of Contents
 
+- [Why Prism Agent](#why-prism-agent)
+- [Why not LangChain?](#why-not-langchain)
 - [Core Concepts](#core-concepts)
 - [Project Layout](#project-layout)
 - [Installation & Configuration](#installation--configuration)
@@ -53,13 +84,19 @@ prism_agent/
 ├── skill_loader.py       # SkillLoaderV2: scans SKILL.yaml, assembles adapters, generates tool schemas
 ├── requirements.txt
 ├── .env.example          # API endpoint config template (copy to .env and fill in)
+├── demo_cli.py           # example: textcraft interactive CLI
+├── demo_server.py        # example: textcraft web demo backend (Flask)
+├── demo_web/             # example: textcraft single-page frontend
 │
 ├── adapters/             # One subdirectory per agent: agent.yaml + <skill>.py adapters
-│   └── __init__.py
+│   ├── __init__.py
+│   └── textcraft/        # example agent's adapters + agent.yaml
 ├── agents/               # One <agent>.py per agent, exposing an init() entry
-│   └── __init__.py
+│   ├── __init__.py
+│   └── textcraft.py      # example agent entry
 └── skills/               # One subdirectory per agent, holding one subdirectory per skill
-    └── __init__.py
+    ├── __init__.py
+    └── textcraft/        # example: doc_summary skill + orchestrator
 ```
 
 ---

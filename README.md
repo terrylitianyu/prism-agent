@@ -3,12 +3,43 @@
 > **[English](README_EN.md)** | 中文
 
 一个应用无关（application-agnostic）的 Agent 框架骨架：Agent Loop + DataStore + Skill/Adapter 装配层。
-本目录不包含任何业务实现，只保留框架内核与三个空目录（[adapters/](adapters/)、[agents/](agents/)、[skills/](skills/)），供你按下面的指引接入自己的业务。
+仓库包含框架内核和一个完整可跑的示例 agent（textcraft，见下文演示），供你跑通后按下面的指引接入自己的业务。
+
+---
+
+## 核心亮点
+
+- **Skill ↔ 数据解耦，真实成立** — 很多框架宣称解耦，这里可以直接验证：textcraft demo 中 LLM 实际发出的是 `classify_document({})` 零参数调用——LLM 只决定"调不调"，文档内容不经过 LLM 上下文，由 DataStore 在工具间接力。同一个 Skill 换个 Adapter 就能接到别的存储。
+- **声明式契约（SKILL.yaml）** — 每个工具的 inputs / outputs / 参数来源显式声明，接口即文档，LLM 不用猜参数——这是 Skill 未来可被平台校验、自动接线的前提。
+- **Anthropic Skill 兼容** — 不做"又一个 LangGraph"，定位是标准 Skill 格式（`SKILL.md` + `scripts/`）的运行时接线层：外部 Skill 拷进来零改动 `scripts/`，本地 Skill 剥离 Adapter 即可外发。
+- **轻量但不玩具** — 内核 8 个文件约 1800 行、运行时依赖仅 4 个，一个下午能读完；同时内置生产级兜底（上下文压缩三级降级、Adapter 全链路异常边界），并附完整可跑的 textcraft 示例（CLI + Web 双 demo）。
+
+---
+
+## 为什么不用 LangChain？
+
+如果你受够了层层封装和"魔幻调参"，这里是另一个极端。Prism Agent 的核心假设很简单：
+
+> **Skill 是纯业务逻辑**——它不该知道自己在被 Agent 调用，不该知道 Session 和 DataStore 的存在：输入从参数进来，输出靠返回值出去。
+>
+> Agent 的循环（Loop）、会话（Session）、存储（DataStore）是基础设施；Skill 是纯函数；Adapter 是唯一的胶水。
+
+| 维度 | LangChain / LangGraph | Prism Agent |
+|------|-----------------------|-------------|
+| 定位 | 全功能编排框架 / 图编排运行时 | 轻量骨架：Loop + DataStore + 装配层 |
+| 抽象 | 层层封装（Chain / Runnable / LCEL……），行为藏在框架内部 | 内核约 1800 行直通 LLM API，一个下午读完，没有魔法 |
+| Skill 形态 | 工具散落在代码里，与框架耦合 | 目录级 Skill（`SKILL.md` + `scripts/`），对齐 Anthropic 官方格式，可整目录搬走 |
+| 数据流 | 状态在 Chain / Graph 节点间隐式传递 | 显式 DataStore + Adapter 接线，LLM 上下文不当中转站 |
+| 依赖 | 庞大的依赖树 | 4 个运行时依赖 |
+
+这不是说 LangChain 不好——需要它的生态集成时，它是合理选择。Prism Agent 适合想要**完全掌控 Agent 循环**、并希望 Skill 成为**可移植资产**的人。
 
 ---
 
 ## 目录
 
+- [核心亮点](#核心亮点)
+- [为什么不用 LangChain？](#为什么不用-langchain)
 - [核心概念](#核心概念)
 - [目录结构](#目录结构)
 - [安装与配置](#安装与配置)
@@ -53,13 +84,19 @@ prism_agent/
 ├── skill_loader.py       # SkillLoaderV2：扫描 SKILL.yaml、装配 adapter、生成 tool schema
 ├── requirements.txt
 ├── .env.example          # API 端点配置模板（复制为 .env 后填入真实值）
+├── demo_cli.py           # 示例：textcraft 交互式 CLI
+├── demo_server.py        # 示例：textcraft Web demo 后端（Flask）
+├── demo_web/             # 示例：textcraft 单页前端
 │
 ├── adapters/             # 每个 agent 一个子目录，里面放 agent.yaml + <skill>.py 适配器
-│   └── __init__.py
+│   ├── __init__.py
+│   └── textcraft/        # 示例 agent 的 adapter 与 agent.yaml
 ├── agents/               # 每个 agent 一个 <agent>.py，提供 init() 入口
-│   └── __init__.py
+│   ├── __init__.py
+│   └── textcraft.py      # 示例 agent 入口
 └── skills/               # 每个 agent 一个子目录，下辖若干 skill（每 skill 一个子目录）
-    └── __init__.py
+    ├── __init__.py
+    └── textcraft/        # 示例：doc_summary skill + orchestrator
 ```
 
 ---
