@@ -765,3 +765,9 @@ A: `agent.agent_loop_stream(...)` 是 generator，逐个 yield SSE 事件：`too
 
 **Q: 想复用别人的 skill 怎么办？**
 A: 如果对方是 Anthropic 风格的 skill（`SKILL.md` + `scripts/`），直接把 skill 目录拷进 `skills/<my_agent>/`，然后：(1) 在 skill 根加一个 `SKILL.yaml` 声明 tool 接口；(2) 在 `adapters/<my_agent>/` 下加一个对应的 adapter，wire 到你自己的 DataStore 字段。零改动原 `scripts/` 代码。
+
+---
+
+## License
+
+[MIT](LICENSE)

@@ -765,3 +765,9 @@ A: `agent.agent_loop_stream(...)` is a generator that yields SSE events one by o
 
 **Q: How do I reuse someone else's skill?**
 A: If it follows the Anthropic style (`SKILL.md` + `scripts/`), copy the skill directory into `skills/<my_agent>/`, then: (1) add a `SKILL.yaml` at the skill root declaring the tool interface; (2) add a matching adapter under `adapters/<my_agent>/` wired to your DataStore fields. Zero changes to the original `scripts/` code.
+
+---
+
+## License
+
+[MIT](LICENSE)
