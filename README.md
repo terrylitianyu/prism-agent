@@ -172,13 +172,14 @@ skill_dirs:
   - skills/my_agent
 
 models:
-  orchestrator: "gemini-3.1-pro-preview"
-  intent: "gemini-3.1-flash-lite-preview"
+  orchestrator: "deepseek-v4-flash"
+  intent: "deepseek-v4-flash"
 
 loop:
   max_iterations: 10
   temperature: 0.3
   max_tokens: 4096
+  # summary_model: "deepseek-v4-flash"   # 可选:上下文压缩用的摘要模型,默认取 models.intent
 ```
 
 [adapters/my_agent/translate.py](adapters/):
@@ -558,12 +559,13 @@ name: writer_agent
 skill_dirs:
   - skills/writer_agent
 models:
-  orchestrator: "gemini-3.1-pro-preview"
-  intent: "gemini-3.1-flash-lite-preview"
+  orchestrator: "deepseek-v4-flash"
+  intent: "deepseek-v4-flash"
 loop:
   max_iterations: 15
   temperature: 0.3
   max_tokens: 4096
+  # summary_model: "deepseek-v4-flash"   # 可选:上下文压缩用的摘要模型,默认取 models.intent
 ```
 
 **adapters/writer_agent/summary.py**：

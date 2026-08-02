@@ -193,10 +193,30 @@ def build_tool_wrapper(
         ctx = get_context()
 
         # 1. Adapter resolves inputs from DataStore via ctx
-        inputs = adapter.resolve_inputs(ctx)
+        try:
+            inputs = adapter.resolve_inputs(ctx)
+        except Exception as e:
+            logger.error(
+                f"Adapter {type(adapter).__name__}.resolve_inputs failed: {e}",
+                exc_info=True,
+            )
+            return json.dumps({
+                "status": "error",
+                "message": f"adapter resolve_inputs failed: {e}",
+            }, ensure_ascii=False)
 
         # 2. Validate inputs
-        error = adapter.validate_inputs(inputs)
+        try:
+            error = adapter.validate_inputs(inputs)
+        except Exception as e:
+            logger.error(
+                f"Adapter {type(adapter).__name__}.validate_inputs failed: {e}",
+                exc_info=True,
+            )
+            return json.dumps({
+                "status": "error",
+                "message": f"adapter validate_inputs failed: {e}",
+            }, ensure_ascii=False)
         if error:
             return json.dumps({"status": "error", "message": error}, ensure_ascii=False)
 
@@ -221,13 +241,38 @@ def build_tool_wrapper(
             return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
         # 6. Extract output data and write to DataStore via adapter
+        #    持久化失败不影响返回给 LLM 的结果（数据已经算出来了）：
+        #    落 error 日志 + 在结果里附加 _persistence_warning 提醒 orchestrator
+        persistence_warning = ""
         if tool_def.output and result is not None:
-            output_data = _extract_output_data(result)
-            if output_data is not None:
-                adapter.write_output(ctx, output_data)
+            try:
+                output_data = _extract_output_data(result)
+                if output_data is not None:
+                    adapter.write_output(ctx, output_data)
+            except Exception as e:
+                logger.error(
+                    f"Adapter {type(adapter).__name__}.write_output failed "
+                    f"(result NOT persisted): {e}",
+                    exc_info=True,
+                )
+                persistence_warning = (
+                    f"write_output failed, result was NOT persisted to DataStore: {e}"
+                )
 
         # 7. Let adapter format the result for orchestrator LLM
-        formatted = adapter.format_llm_response(tool_def.name, result)
+        try:
+            formatted = adapter.format_llm_response(tool_def.name, result)
+        except Exception as e:
+            logger.error(
+                f"Adapter {type(adapter).__name__}.format_llm_response failed: {e}; "
+                f"falling back to raw result.",
+                exc_info=True,
+            )
+            formatted = result
+
+        if persistence_warning:
+            formatted = _attach_persistence_warning(formatted, persistence_warning)
+
         if isinstance(formatted, str):
             return formatted
         return json.dumps(formatted, ensure_ascii=False, default=str)
@@ -265,6 +310,22 @@ def _extract_output_data(result) -> Any:
             pass
 
     return None
+
+
+def _attach_persistence_warning(formatted: Any, warning: str) -> Any:
+    """把持久化警告附加到返回给 orchestrator 的结果上（dict / JSON str / 普通 str 均可）。"""
+    if isinstance(formatted, dict):
+        return {**formatted, "_persistence_warning": warning}
+    if isinstance(formatted, str):
+        try:
+            parsed = json.loads(formatted)
+            if isinstance(parsed, dict):
+                parsed["_persistence_warning"] = warning
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return f"{formatted}\n[_persistence_warning] {warning}"
+    return formatted
 
 
 class SkillLoaderV2:

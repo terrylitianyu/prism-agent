@@ -29,8 +29,8 @@ API_KEY = os.environ.get("API_KEY", "")
 
 # Default model mapping — overridden by agent.yaml `models` section at init time
 MODELS = {
-    "orchestrator": "gemini-3.1-pro-preview",
-    "intent": "gemini-3.1-flash-lite-preview",
+    "orchestrator": "deepseek-v4-flash",
+    "intent": "deepseek-v4-flash",
 }
 
 
