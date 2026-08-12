@@ -18,6 +18,7 @@ Flow:
 """
 
 import importlib
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -25,7 +26,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
-from skill_context import SkillAdapter, SkillContext
+from .skill_context import SkillAdapter, SkillContext
+from .client import SkillLLM
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +118,7 @@ def _resolve_handler(skill_dir: Path, handler_path: str) -> Optional[Callable]:
     module_name, func_name = parts
 
     # Build module path from skill_dir relative to WORKDIR (project root, always on sys.path)
-    from core import WORKDIR
+    from .core import WORKDIR
     try:
         rel_path = skill_dir.resolve().relative_to(WORKDIR.resolve())
         # Convert path separators to dots: skills/dm_agent/modification → skills.dm_agent.modification
@@ -174,19 +176,33 @@ def build_tool_wrapper(
     get_context: Callable,
     handler: Callable,
     llm_params: set = None,
+    skill_name: str = "",
 ) -> Callable:
     """
     Build a wrapper that:
     1. Uses adapter.resolve_inputs(ctx) to get skill inputs from DataStore
-    2. Calls the pure handler function
+    2. Calls the pure handler function (with an injected `llm` handle)
     3. Uses adapter.write_output(ctx, result) to persist output to DataStore
     4. Returns a JSON string for the orchestrator
 
     Args:
         get_context: Callable that returns a SkillContext instance at call time.
         llm_params: Set of param names that LLM provides. These override adapter inputs.
+        skill_name: Skill name from SKILL.yaml; bound to the injected SkillLLM handle.
     """
     llm_params = llm_params or set()
+
+    # 只在 handler 能接收时才注入 llm(显式声明 llm 参数,或带 **kw 吸收):
+    # 严格签名的确定性 handler(不调 LLM,无 **kw)不多塞参数,避免 TypeError。
+    # 构建期内省一次即可,每次调用不重复开销。
+    try:
+        _sig_params = inspect.signature(handler).parameters
+        accepts_llm = (
+            "llm" in _sig_params
+            or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in _sig_params.values())
+        )
+    except (TypeError, ValueError):
+        accepts_llm = False  # 不可内省的对象(如部分 builtin)保持注入前行为
 
     def wrapper(**orchestrator_kwargs) -> str:
         # Get current SkillContext at call time (not at registration time!)
@@ -232,6 +248,12 @@ def build_tool_wrapper(
                 kwargs[k] = v
             elif tool_def.pass_kwargs and k not in kwargs:
                 kwargs[k] = v
+
+        # 4.5 Inject the skill's LLM handle (reserved kwarg: injected AFTER the
+        #     override step, so an LLM-passed param named "llm" cannot replace it;
+        #     skipped entirely for handlers that can't accept it)
+        if accepts_llm:
+            kwargs["llm"] = SkillLLM(skill_name)
 
         # 5. Call the handler
         try:
@@ -362,7 +384,7 @@ class SkillLoaderV2:
         self._agent_config = self._load_agent_config()
 
         # 2. Resolve skill_dirs from config (relative to project root)
-        from core import WORKDIR
+        from .core import WORKDIR
         raw_dirs = self._agent_config.get("skill_dirs", [])
         self.skill_dirs: List[Path] = [WORKDIR / d for d in raw_dirs]
 
@@ -387,7 +409,6 @@ class SkillLoaderV2:
 
     def _discover_adapters(self) -> Dict[str, SkillAdapter]:
         """扫描 agent_dir/*.py 自动发现 SkillAdapter 子类。"""
-        import inspect as _inspect
         adapters = {}
         if not self.agent_dir.exists():
             return adapters
@@ -405,7 +426,7 @@ class SkillLoaderV2:
             except Exception as e:
                 logger.warning(f"[SkillLoaderV2] Failed to import adapter {module_path}: {e}")
                 continue
-            for name, obj in _inspect.getmembers(mod, _inspect.isclass):
+            for name, obj in inspect.getmembers(mod, inspect.isclass):
                 if issubclass(obj, SkillAdapter) and obj is not SkillAdapter:
                     skill_name = getattr(obj, "skill_name", py_file.stem)
                     adapters[skill_name] = obj()
@@ -533,7 +554,8 @@ class SkillLoaderV2:
             llm_params = set(tool_params.get(tool_def.name, {}).keys())
 
             wrapper = build_tool_wrapper(
-                tool_def, adapter, self.get_context, handler, llm_params
+                tool_def, adapter, self.get_context, handler, llm_params,
+                skill_name=manifest.name,
             )
             self._tool_handlers[tool_def.name] = wrapper
 

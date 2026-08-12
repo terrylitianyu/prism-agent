@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
 
-from core import SESSION_DIR
+from .core import SESSION_DIR
 
 
 class BaseSession:

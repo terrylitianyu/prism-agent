@@ -4,9 +4,9 @@
 
 from pathlib import Path
 
-import agent
-from core import ADAPTERS_DIR
-from data_store import SQLiteDataStore
+from prism import agent
+from prism.core import ADAPTERS_DIR
+from prism.data_store import SQLiteDataStore
 
 
 def init(data_dir: Path):

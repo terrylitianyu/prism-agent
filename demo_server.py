@@ -16,8 +16,8 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
-import agent
-from core import WORKDIR
+from prism import agent
+from prism.core import WORKDIR
 
 DATA_DIR = Path(".data")
 WEB_DIR = WORKDIR / "demo_web"

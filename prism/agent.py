@@ -16,11 +16,11 @@ import contextvars
 
 from json_repair import repair_json
 
-from core import (
+from .core import (
     WORKDIR, SESSION_DIR, SKILLS_DIR, ADAPTERS_DIR,
     TOKEN_THRESHOLD, MAX_TOOL_OUTPUT,
 )
-from client import call_llm, call_llm_with_tools, MODELS
+from .client import call_llm, call_llm_with_tools, MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +42,9 @@ _loop_logger.setLevel(logging.DEBUG)
 # SECTION: Session
 # =============================================================================
 
-from session import BaseSession
-from session_context import set_current_session, get_current_session
-from skill_context import SkillContext
+from .session import BaseSession
+from .session_context import set_current_session, get_current_session
+from .skill_context import SkillContext
 
 # Module-level state — set by init_agent()
 _default_session = None
@@ -100,7 +100,7 @@ def init_agent(agent_dir: Path, store=None):
     # Configure MODELS from agent.yaml
     models_config = agent_config.get("models")
     if models_config:
-        from client import configure_models
+        from .client import configure_models
         configure_models(models_config)
 
     # Configure loop params from agent.yaml
@@ -109,7 +109,7 @@ def init_agent(agent_dir: Path, store=None):
         _loop_config.update(loop_config)
 
     # Initialize SkillLoaderV2
-    from skill_loader import SkillLoaderV2
+    from .skill_loader import SkillLoaderV2
     SKILLS = SkillLoaderV2(agent_dir=agent_dir, get_context=_get_context)
 
     # Build TOOLS and TOOL_HANDLERS

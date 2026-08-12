@@ -4,7 +4,7 @@
 
 from typing import Any, Dict
 
-from skill_context import SkillAdapter, SkillContext
+from prism.skill_context import SkillAdapter, SkillContext
 
 
 class DocSummaryAdapter(SkillAdapter):

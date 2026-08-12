@@ -14,7 +14,7 @@ import time
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from core import WORKDIR
+from .core import WORKDIR
 
 # 从项目根目录的 .env 加载配置(已存在的系统环境变量优先,不会被 .env 覆盖)
 load_dotenv(WORKDIR / ".env")
@@ -45,6 +45,35 @@ def configure_models(models_config: dict):
     global MODELS
     if models_config:
         MODELS.update(models_config)
+
+
+class LLMError(Exception):
+    """LLM 调用失败(SkillLLM.complete 抛出,替代 [LLM Error: 文本标记约定)。"""
+
+
+class SkillLLM:
+    """注入给 skill handler 的 LLM 句柄,按 alias 惰性路由模型。
+
+    框架在每次工具调用前构造并注入(kwargs["llm"]),handler 不 import client。
+    模型在每次调用时经 get_model(alias) 解析,agent.yaml 的 models 覆盖自然生效。
+    """
+
+    def __init__(self, alias: str):
+        self.alias = alias
+
+    def complete(self, messages: list, temperature: float = 0.7,
+                 max_tokens: int = 4096) -> str:
+        """调用 alias 绑定的模型,返回 content 文本;失败抛 LLMError。"""
+        resp = call_llm(
+            messages,
+            model=get_model(self.alias),
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        content = (resp.get("content") or "").strip()
+        if not content or content.startswith("[LLM Error:"):
+            raise LLMError(content or "empty response")
+        return content
 
 
 # =============================================================================

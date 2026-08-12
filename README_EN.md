@@ -12,7 +12,7 @@ The repo ships the framework kernel plus a complete, runnable example agent (tex
 - **Skill ↔ data decoupling that actually holds up** — many frameworks claim it; here you can verify it: in the textcraft demo the LLM literally issues `classify_document({})`, a zero-argument call. The LLM only decides *whether* to call — the document never passes through the LLM context; data flows between tools via the DataStore. Swap the Adapter and the same Skill runs on a different store.
 - **Declarative contracts (SKILL.yaml)** — every tool's inputs / outputs / parameter sources are explicitly declared. The interface is the documentation; the LLM never guesses parameters — the prerequisite for platform-level skill validation and auto-wiring.
 - **Anthropic Skill-compatible** — not "yet another LangGraph": a runtime wiring layer for the standard skill format (`SKILL.md` + `scripts/`). External skills drop in with zero changes to `scripts/`; strip the Adapter and a local skill exports as a pure Anthropic Skill.
-- **Lightweight but not a toy** — a ~1,800-line kernel across 8 files with only 4 runtime dependencies, readable in an afternoon — yet with production-grade fallbacks built in (three-level context-compression degradation, full exception boundaries around the Adapter layer), plus a complete runnable textcraft demo (CLI + web).
+- **Lightweight but not a toy** — the kernel lives in the [prism/](prism/) package: ~1,800 lines across 8 modules with only 4 runtime dependencies, readable in an afternoon — yet with production-grade fallbacks built in (three-level context-compression degradation, full exception boundaries around the Adapter layer), plus a complete runnable textcraft demo (CLI + web).
 
 ---
 
@@ -20,7 +20,7 @@ The repo ships the framework kernel plus a complete, runnable example agent (tex
 
 If you've had enough of stacked abstractions and "magic tuning", this is the opposite extreme. Prism Agent's core assumption is simple:
 
-> **A Skill is pure business logic** — it shouldn't know it's being invoked by an agent, and shouldn't know Session or DataStore exist: inputs arrive as parameters, outputs leave as return values.
+> **A Skill is pure business logic** — it shouldn't know it's being invoked by an agent, and shouldn't know Session or DataStore exist: inputs arrive as parameters, outputs leave as return values, and even the LLM handle (`llm.complete(...)`) is injected by the framework as a parameter — not a single framework import in skill code.
 >
 > The loop, session, and DataStore are infrastructure; Skills are pure functions; the Adapter is the only glue.
 
@@ -61,7 +61,7 @@ The framework consists of four roles with strictly separated responsibilities:
 
 | Role | Location | Responsibility |
 |------|----------|----------------|
-| **Agent kernel** | `agent.py` etc. at the root | Generic loop: LLM calls, tool orchestration, context compression, session management. Knows nothing about business. |
+| **Agent kernel** | the [prism/](prism/) package (8 modules) | Generic loop: LLM calls, tool orchestration, context compression, session management. Knows nothing about business. |
 | **Skill** | [skills/&lt;agent&gt;/&lt;skill&gt;/](skills/) | Pure business functions (handlers) + declarative interface (`SKILL.yaml`) + usage docs (`SKILL.md`). No dependency on session, store, or framework. |
 | **Adapter** | [adapters/&lt;agent&gt;/&lt;skill&gt;.py](adapters/) | Pulls the skill's inputs from the DataStore and writes its outputs back; declares which parameters the LLM may fill. |
 | **Agent instance** | [agents/&lt;agent&gt;.py](agents/) | A single entry function: initializes the DataStore and calls `agent.init_agent(agent_dir, store)`. |
@@ -74,14 +74,15 @@ In one sentence: **a Skill is a portable, reusable capability; an Adapter is the
 
 ```
 prism_agent/
-├── agent.py              # Agent loop kernel (LLM loop, parallel tools, context compression)
-├── client.py             # LLM client (call_llm / call_llm_with_tools / MODELS)
-├── core.py               # Constants: WORKDIR / SESSION_DIR / SKILLS_DIR / ADAPTERS_DIR
-├── data_store.py         # DataStore abstraction + SQLiteDataStore (wide table + dynamic columns)
-├── session.py            # BaseSession (conversation history, chat_events, turn_count)
-├── session_context.py    # Propagates the current session via contextvars
-├── skill_context.py      # SkillContext / SkillAdapter / BizProxy / PassthroughAdapter
-├── skill_loader.py       # SkillLoaderV2: scans SKILL.yaml, assembles adapters, generates tool schemas
+├── prism/                # framework kernel package (8 modules, ~1,800 lines)
+│   ├── agent.py              # Agent loop kernel (LLM loop, parallel tools, context compression)
+│   ├── client.py             # LLM client (call_llm / SkillLLM / MODELS)
+│   ├── core.py               # Constants: WORKDIR / SESSION_DIR / SKILLS_DIR / ADAPTERS_DIR
+│   ├── data_store.py         # DataStore abstraction + SQLiteDataStore (wide table + dynamic columns)
+│   ├── session.py            # BaseSession (conversation history, chat_events, turn_count)
+│   ├── session_context.py    # Propagates the current session via contextvars
+│   ├── skill_context.py      # SkillContext / SkillAdapter / BizProxy / PassthroughAdapter
+│   └── skill_loader.py       # SkillLoaderV2: scans SKILL.yaml, assembles adapters, injects llm, generates tool schemas
 ├── requirements.txt
 ├── .env.example          # API endpoint config template (copy to .env and fill in)
 ├── demo_cli.py           # example: textcraft interactive CLI
@@ -170,21 +171,22 @@ tools:
 
 ```python
 import json
-from client import call_llm, MODELS
 
 
-def tool_translate(source_text: str = "", target_lang: str = "en", **kw) -> str:
-    """Pure function: no session, no store. All inputs arrive via parameters."""
+def tool_translate(source_text: str = "", target_lang: str = "en", llm=None, **kw) -> str:
+    """Pure function: no session/store/client imports. Data arrives via parameters;
+    LLM capability arrives via the framework-injected llm handle."""
     if not source_text:
         return json.dumps({"status": "error", "message": "empty source_text"}, ensure_ascii=False)
 
-    result = call_llm(
-        messages=[{"role": "user", "content": f"Translate to {target_lang}:\n\n{source_text}"}],
-        model=MODELS["orchestrator"],
-        temperature=0.3,
-        max_tokens=2048,
-    )
-    translated = result["content"]
+    try:
+        translated = llm.complete(
+            messages=[{"role": "user", "content": f"Translate to {target_lang}:\n\n{source_text}"}],
+            temperature=0.3,
+            max_tokens=2048,
+        )
+    except Exception as e:
+        return json.dumps({"status": "error", "message": f"LLM call failed: {e}"}, ensure_ascii=False)
     return json.dumps({
         "status": "success",
         "translated": translated,
@@ -211,7 +213,7 @@ skill_dirs:
 
 models:
   orchestrator: "deepseek-v4-flash"        # global fallback model
-  # <skill_name>: "deepseek-v4-flash"      # optional: per-skill model, referenced via get_model("<skill_name>") in handlers
+  # <skill_name>: "deepseek-v4-flash"      # optional: per-skill model, automatically bound to the llm handle injected into that skill's handlers
 
 loop:
   max_iterations: 10
@@ -224,7 +226,7 @@ loop:
 
 ```python
 from typing import Any, Dict
-from skill_context import SkillAdapter, SkillContext
+from prism.skill_context import SkillAdapter, SkillContext
 
 
 class TranslateAdapter(SkillAdapter):
@@ -261,9 +263,9 @@ class TranslateAdapter(SkillAdapter):
 ```python
 from pathlib import Path
 
-import agent
-from core import ADAPTERS_DIR
-from data_store import SQLiteDataStore
+from prism import agent
+from prism.core import ADAPTERS_DIR
+from prism.data_store import SQLiteDataStore
 
 
 def init(data_dir: Path):
@@ -282,7 +284,7 @@ def init(data_dir: Path):
 ```python
 from pathlib import Path
 from agents.my_agent import init
-import agent
+from prism import agent
 
 store = init(Path(".data"))
 
@@ -360,7 +362,7 @@ Except for `SKILL.md`, `SKILL.yaml`, `SYSTEM.md`, and `__init__.py`, every `.py`
 
 ### Handler path resolution
 
-A `handler: <module>.<function>` entry in SKILL.yaml is resolved in this order (see [skill_loader.py:_resolve_handler](skill_loader.py#L98)):
+A `handler: <module>.<function>` entry in SKILL.yaml is resolved in this order (see [prism/skill_loader.py:_resolve_handler](prism/skill_loader.py#L100)):
 
 1. **First try `<skill>/scripts/<module>.py`** ← recommended: `handler: handlers.tool_x`
 2. Then `<skill>/<module>.py` (legacy flat layout)
@@ -384,7 +386,7 @@ In short: **the structure matches Anthropic's; the wiring is reinforced by `SKIL
 
 ## The Adapter Layer in Detail
 
-The Adapter is the layer you most need to understand when writing a new agent. It subclasses `SkillAdapter` from [skill_context.py:98](skill_context.py#L98) and has 5 methods (2 required, 3 optional overrides).
+The Adapter is the layer you most need to understand when writing a new agent. It subclasses `SkillAdapter` from [prism/skill_context.py:98](prism/skill_context.py#L98) and has 5 methods (2 required, 3 optional overrides).
 
 ### Method overview
 
@@ -420,7 +422,7 @@ def resolve_inputs(self, ctx: SkillContext) -> Dict[str, Any]:
     }
 ```
 
-`ctx` is a [SkillContext](skill_context.py#L61) with three entry points:
+`ctx` is a [SkillContext](prism/skill_context.py#L61) with three entry points:
 
 - `ctx.store` — the DataStore instance (`get_field/set_field/delete_field/ensure_field`)
 - `ctx.session_id` — the current session id
@@ -475,7 +477,7 @@ def get_tool_params(self) -> Dict[str, dict]:
     }
 ```
 
-Framework rules (see [skill_loader.py:209-214](skill_loader.py#L209-L214)):
+Framework rules (see [prism/skill_loader.py:245-250](prism/skill_loader.py#L245-L250)):
 - Fields declared in `get_tool_params` → the LLM's value **overrides** the `resolve_inputs` value
 - Other fields the LLM passes are forwarded to the handler if `pass_kwargs=True` (the default)
 
@@ -493,7 +495,7 @@ def resolve_prompt_context(self, ctx: SkillContext) -> str:
     return f"## Current Summary\n```json\n{json.dumps(summary, ensure_ascii=False, indent=2)}\n```"
 ```
 
-Only the adapter of the skill hosting `SYSTEM.md` is called (see [skill_loader.py:440-458](skill_loader.py#L440-L458)) — usually the `orchestrator` skill.
+Only the adapter of the skill hosting `SYSTEM.md` is called (see [prism/skill_loader.py:523-542](prism/skill_loader.py#L523-L542)) — usually the `orchestrator` skill.
 
 ### 7. `format_llm_response(tool_name, result)` (optional)
 
@@ -570,14 +572,14 @@ An agent should have exactly **one** `SYSTEM.md`.
 
 ## Handler Conventions
 
-Handlers are pure functions: they do not import session, they do not import store. All inputs arrive via parameters.
+Handlers are pure functions: no session, store, or client imports. All inputs arrive via parameters — **including LLM capability**: the framework injects an `llm` handle before every call (`llm.complete(messages, temperature=..., max_tokens=...) -> str`, raising `LLMError` on failure), with the model automatically routed by skill name.
 
 ```python
-def tool_translate(source_text: str = "", target_lang: str = "en", **kw) -> str:
+def tool_translate(source_text: str = "", target_lang: str = "en", llm=None, **kw) -> str:
     if not source_text:
         return json.dumps({"status": "error", "message": "empty"}, ensure_ascii=False)
 
-    # ... business logic ...
+    # ... business logic (use llm.complete(...) when you need the LLM) ...
 
     return json.dumps({
         "status": "success",
@@ -596,6 +598,7 @@ Conventions:
 - **`status`**: `"success"` / `"error"` (the LLM relies on it to tell whether the call succeeded)
 - **`_output_data`**: content to persist. Absent means the skill is read-only
 - **`instant_reply`** (optional): a one-liner pushed to the frontend immediately (no need to wait for the LLM's reply)
+- **`llm`** (reserved word): the framework-injected LLM handle, bound to the same-named key in the `models` section of `agent.yaml` (falls back to `orchestrator` when unconfigured). It does not come from SKILL.yaml inputs, the DataStore, or LLM parameters. When calling a handler directly (e.g. in unit tests), pass your own stub — handler unit tests no longer need an API key. Deterministic handlers that don't need the LLM simply omit the `llm` parameter: the framework inspects the signature and injects **on demand** — strict-signature handlers (no `**kw`) never receive an extra argument
 - Parameters not declared in `SKILL.yaml` `inputs` (e.g. `**kw`) are forwarded when `pass_kwargs=True`, for compatibility with extra keys the orchestrator may pass
 
 ---
@@ -631,7 +634,7 @@ skill_dirs:
   - skills/writer_agent
 models:
   orchestrator: "deepseek-v4-flash"        # global fallback model
-  # <skill_name>: "deepseek-v4-flash"      # optional: per-skill model, referenced via get_model("<skill_name>") in handlers
+  # <skill_name>: "deepseek-v4-flash"      # optional: per-skill model, automatically bound to the llm handle injected into that skill's handlers
 loop:
   max_iterations: 15
   temperature: 0.3
@@ -643,7 +646,7 @@ loop:
 
 ```python
 from typing import Any, Dict
-from skill_context import SkillAdapter, SkillContext
+from prism.skill_context import SkillAdapter, SkillContext
 
 
 class SummaryAdapter(SkillAdapter):
@@ -707,12 +710,11 @@ tools:
 
 ```python
 import json
-from client import call_llm, MODELS
 from .prompts import SUMMARY_GENERATE_PROMPT
 
 
-def tool_generate_summary(article_text=None, user_query="", **kw) -> str:
-    # ... call the LLM to extract title / key points / abstract (omitted) ...
+def tool_generate_summary(article_text=None, user_query="", llm=None, **kw) -> str:
+    # ... extract title / key points / abstract via the injected llm handle (omitted) ...
     result = {"title": "...", "bullets": ["...", "..."], "abstract": "..."}
     return json.dumps({
         "status": "success",
@@ -721,9 +723,10 @@ def tool_generate_summary(article_text=None, user_query="", **kw) -> str:
     }, ensure_ascii=False)
 
 
-def tool_revise_summary(summary=None, revision_request="", **kw) -> str:
+def tool_revise_summary(summary=None, revision_request="", llm=None, **kw) -> str:
     # Note: revision_request is provided by the LLM via get_tool_params,
-    # while summary is pulled from the DataStore by SummaryAdapter.resolve_inputs
+    # summary is pulled from the DataStore by SummaryAdapter.resolve_inputs,
+    # and llm is injected by the framework
     # ... omitted ...
     return json.dumps({"status": "success", "summary": summary, "_output_data": {"summary": summary}}, ensure_ascii=False)
 ```
@@ -732,9 +735,9 @@ def tool_revise_summary(summary=None, revision_request="", **kw) -> str:
 
 ```python
 from pathlib import Path
-import agent
-from core import ADAPTERS_DIR
-from data_store import SQLiteDataStore
+from prism import agent
+from prism.core import ADAPTERS_DIR
+from prism.data_store import SQLiteDataStore
 
 
 def init(data_dir: Path):
@@ -762,11 +765,12 @@ Using a `revise_summary` call as the example (the moment the LLM decides to call
                            │
 4. Validation: SummaryAdapter.validate_inputs(inputs)   [optional]
                            │
-5. Fields filtered by SKILL.yaml inputs + LLM param override
+5. Fields filtered by SKILL.yaml inputs + LLM param override, then the framework injects the llm handle
      kwargs = {
          "article_text": "...",
          "summary": {...},
          "revision_request": "make the tone livelier",   # ← provided by the LLM
+         "llm": SkillLLM("summary"),                     # ← injected by the framework (bound to the same-named model in models)
      }
                            │
 6. tool_revise_summary(**kwargs) → returns JSON
@@ -783,16 +787,16 @@ Using a `revise_summary` call as the example (the moment the LLM decides to call
 ## FAQ
 
 **Q: Does every skill need an adapter?**
-A: It needs one if you want its tools to be *callable by the LLM*. Documentation-only skills (whose SKILL.md provides instructions for other skills) can skip the adapter — they just won't be registered as tools. You can also use the framework-provided `PassthroughAdapter` ([skill_context.py:182](skill_context.py#L182)) as a `default_adapter`, which passes the `SkillContext` directly to the handler.
+A: It needs one if you want its tools to be *callable by the LLM*. Documentation-only skills (whose SKILL.md provides instructions for other skills) can skip the adapter — they just won't be registered as tools. You can also use the framework-provided `PassthroughAdapter` ([prism/skill_context.py:182](prism/skill_context.py#L182)) as a `default_adapter`, which passes the `SkillContext` directly to the handler.
 
 **Q: Can one skill have multiple adapters?**
 A: Not recommended — the convention is one adapter per skill. If different tools need different data sources, branch on the tool name inside one adapter: `if tool_name == "xxx": ...`. Usually, though, splitting into two skills is the better design.
 
 **Q: Do I need to create tables for the DataStore in advance?**
-A: No. `SQLiteDataStore` automatically runs `ALTER TABLE ADD COLUMN` the first time you call `set_field(session_id, "any_field", value)` (see [data_store.py:86](data_store.py#L86)). All field values are stored as JSON strings.
+A: No. `SQLiteDataStore` automatically runs `ALTER TABLE ADD COLUMN` the first time you call `set_field(session_id, "any_field", value)` (see [prism/data_store.py:86](prism/data_store.py#L86)). All field values are stored as JSON strings.
 
 **Q: How do I change the model aliases in MODELS?**
-A: The framework ships exactly one built-in alias: the `orchestrator` fallback. Convention: **a skill uses its own name as its alias** — handlers call `get_model("doc_summary")` (which falls back to `orchestrator` when unconfigured); a same-named key in the `models` section of `agent.yaml` becomes that skill's dedicated model. At startup, `init_agent` calls `client.configure_models(...)` to merge the section into MODELS. See [adapters/textcraft/agent.yaml](adapters/textcraft/agent.yaml).
+A: The framework ships exactly one built-in alias: the `orchestrator` fallback. Convention: **a skill uses its own name as its alias** — a same-named key in the `models` section of `agent.yaml` becomes that skill's dedicated model, and the framework binds it to the `llm` handle injected into the handler, so handlers never pick models themselves (unconfigured aliases fall back to `orchestrator`). At startup, `init_agent` calls `client.configure_models(...)` to merge the section into MODELS. See [adapters/textcraft/agent.yaml](adapters/textcraft/agent.yaml).
 
 **Q: When does context compression trigger?**
 A: At the start of every loop iteration the framework estimates tokens; beyond `core.TOKEN_THRESHOLD` (default 80k) it (1) prunes oversized tool outputs, then (2) summarizes the middle messages with a lightweight model. No manual intervention needed.

@@ -12,7 +12,7 @@
 - **Skill ↔ 数据解耦，真实成立** — 很多框架宣称解耦，这里可以直接验证：textcraft demo 中 LLM 实际发出的是 `classify_document({})` 零参数调用——LLM 只决定"调不调"，文档内容不经过 LLM 上下文，由 DataStore 在工具间接力。同一个 Skill 换个 Adapter 就能接到别的存储。
 - **声明式契约（SKILL.yaml）** — 每个工具的 inputs / outputs / 参数来源显式声明，接口即文档，LLM 不用猜参数——这是 Skill 未来可被平台校验、自动接线的前提。
 - **Anthropic Skill 兼容** — 不做"又一个 LangGraph"，定位是标准 Skill 格式（`SKILL.md` + `scripts/`）的运行时接线层：外部 Skill 拷进来零改动 `scripts/`，本地 Skill 剥离 Adapter 即可外发。
-- **轻量但不玩具** — 内核 8 个文件约 1800 行、运行时依赖仅 4 个，一个下午能读完；同时内置生产级兜底（上下文压缩三级降级、Adapter 全链路异常边界），并附完整可跑的 textcraft 示例（CLI + Web 双 demo）。
+- **轻量但不玩具** — 内核收在 [prism/](prism/) 包里，8 个模块约 1800 行、运行时依赖仅 4 个，一个下午能读完；同时内置生产级兜底（上下文压缩三级降级、Adapter 全链路异常边界），并附完整可跑的 textcraft 示例（CLI + Web 双 demo）。
 
 ---
 
@@ -20,7 +20,7 @@
 
 如果你受够了层层封装和"魔幻调参"，这里是另一个极端。Prism Agent 的核心假设很简单：
 
-> **Skill 是纯业务逻辑**——它不该知道自己在被 Agent 调用，不该知道 Session 和 DataStore 的存在：输入从参数进来，输出靠返回值出去。
+> **Skill 是纯业务逻辑**——它不该知道自己在被 Agent 调用，不该知道 Session 和 DataStore 的存在：输入从参数进来，输出靠返回值出去，连 LLM 句柄（`llm.complete(...)`）都由框架作为参数注入——Skill 代码里没有一个框架 import。
 >
 > Agent 的循环（Loop）、会话（Session）、存储（DataStore）是基础设施；Skill 是纯函数；Adapter 是唯一的胶水。
 
@@ -61,7 +61,7 @@
 
 | 角色 | 位置 | 职责 |
 |------|------|------|
-| **Agent 内核** | 根目录 `agent.py` 等 | 通用循环：LLM 调用、工具编排、上下文压缩、Session 管理。不关心业务。 |
+| **Agent 内核** | [prism/](prism/) 包（8 个模块） | 通用循环：LLM 调用、工具编排、上下文压缩、Session 管理。不关心业务。 |
 | **Skill（技能）** | [skills/&lt;agent&gt;/&lt;skill&gt;/](skills/) | 纯业务函数（handler）+ 声明式接口（`SKILL.yaml`）+ 使用说明（`SKILL.md`）。不依赖 session、store、框架。 |
 | **Adapter（适配器）** | [adapters/&lt;agent&gt;/&lt;skill&gt;.py](adapters/) | 把 Skill 的入参从 DataStore 里取出来、把出参写回去；声明 LLM 可填哪些参数。 |
 | **Agent 实例** | [agents/&lt;agent&gt;.py](agents/) | 一个入口函数：初始化 DataStore 并调用 `agent.init_agent(agent_dir, store)`。 |
@@ -74,14 +74,15 @@
 
 ```
 prism_agent/
-├── agent.py              # Agent Loop 内核（LLM 循环、工具并行、上下文压缩）
-├── client.py             # LLM 客户端（call_llm / call_llm_with_tools / MODELS）
-├── core.py               # 常量：WORKDIR / SESSION_DIR / SKILLS_DIR / ADAPTERS_DIR
-├── data_store.py         # DataStore 抽象 + SQLiteDataStore 实现（宽表 + 动态加列）
-├── session.py            # BaseSession（对话历史、chat_events、turn_count）
-├── session_context.py    # 通过 contextvars 传递当前 session
-├── skill_context.py      # SkillContext / SkillAdapter / BizProxy / PassthroughAdapter
-├── skill_loader.py       # SkillLoaderV2：扫描 SKILL.yaml、装配 adapter、生成 tool schema
+├── prism/                # 框架内核包（8 个模块，约 1800 行）
+│   ├── agent.py              # Agent Loop 内核（LLM 循环、工具并行、上下文压缩）
+│   ├── client.py             # LLM 客户端（call_llm / SkillLLM / MODELS）
+│   ├── core.py               # 常量：WORKDIR / SESSION_DIR / SKILLS_DIR / ADAPTERS_DIR
+│   ├── data_store.py         # DataStore 抽象 + SQLiteDataStore 实现（宽表 + 动态加列）
+│   ├── session.py            # BaseSession（对话历史、chat_events、turn_count）
+│   ├── session_context.py    # 通过 contextvars 传递当前 session
+│   ├── skill_context.py      # SkillContext / SkillAdapter / BizProxy / PassthroughAdapter
+│   └── skill_loader.py       # SkillLoaderV2：扫描 SKILL.yaml、装配 adapter、注入 llm、生成 tool schema
 ├── requirements.txt
 ├── .env.example          # API 端点配置模板（复制为 .env 后填入真实值）
 ├── demo_cli.py           # 示例：textcraft 交互式 CLI
@@ -170,21 +171,21 @@ tools:
 
 ```python
 import json
-from client import call_llm, MODELS
 
 
-def tool_translate(source_text: str = "", target_lang: str = "en", **kw) -> str:
-    """纯函数：不依赖 session、store。所有输入来自参数。"""
+def tool_translate(source_text: str = "", target_lang: str = "en", llm=None, **kw) -> str:
+    """纯函数：不 import session / store / client。数据来自参数,LLM 能力来自框架注入的 llm 句柄。"""
     if not source_text:
         return json.dumps({"status": "error", "message": "empty source_text"}, ensure_ascii=False)
 
-    result = call_llm(
-        messages=[{"role": "user", "content": f"Translate to {target_lang}:\n\n{source_text}"}],
-        model=MODELS["orchestrator"],
-        temperature=0.3,
-        max_tokens=2048,
-    )
-    translated = result["content"]
+    try:
+        translated = llm.complete(
+            messages=[{"role": "user", "content": f"Translate to {target_lang}:\n\n{source_text}"}],
+            temperature=0.3,
+            max_tokens=2048,
+        )
+    except Exception as e:
+        return json.dumps({"status": "error", "message": f"LLM call failed: {e}"}, ensure_ascii=False)
     return json.dumps({
         "status": "success",
         "translated": translated,
@@ -211,7 +212,7 @@ skill_dirs:
 
 models:
   orchestrator: "deepseek-v4-flash"        # 全局兜底模型
-  # <skill_name>: "deepseek-v4-flash"      # 可选:某 skill 的专用模型,handler 里用 get_model("<skill_name>") 引用
+  # <skill_name>: "deepseek-v4-flash"      # 可选:某 skill 的专用模型,自动绑定到注入该 skill handler 的 llm 句柄
 
 loop:
   max_iterations: 10
@@ -224,7 +225,7 @@ loop:
 
 ```python
 from typing import Any, Dict
-from skill_context import SkillAdapter, SkillContext
+from prism.skill_context import SkillAdapter, SkillContext
 
 
 class TranslateAdapter(SkillAdapter):
@@ -261,9 +262,9 @@ class TranslateAdapter(SkillAdapter):
 ```python
 from pathlib import Path
 
-import agent
-from core import ADAPTERS_DIR
-from data_store import SQLiteDataStore
+from prism import agent
+from prism.core import ADAPTERS_DIR
+from prism.data_store import SQLiteDataStore
 
 
 def init(data_dir: Path):
@@ -282,7 +283,7 @@ def init(data_dir: Path):
 ```python
 from pathlib import Path
 from agents.my_agent import init
-import agent
+from prism import agent
 
 store = init(Path(".data"))
 
@@ -360,7 +361,7 @@ skills/<agent>/<skill>/
 
 ### Handler 路径解析规则
 
-`SKILL.yaml` 里 `handler: <module>.<function>` 的解析顺序（见 [skill_loader.py:_resolve_handler](skill_loader.py#L98)）：
+`SKILL.yaml` 里 `handler: <module>.<function>` 的解析顺序（见 [prism/skill_loader.py:_resolve_handler](prism/skill_loader.py#L100)）：
 
 1. **先查 `<skill>/scripts/<module>.py`** ← 推荐写法：`handler: handlers.tool_x`
 2. 再查 `<skill>/<module>.py`（兼容遗留的平铺布局）
@@ -384,7 +385,7 @@ skills/<agent>/<skill>/
 
 ## Adapter 详细指南
 
-Adapter 是新写 Agent 时最需要理解的一层。它继承自 [skill_context.py:98](skill_context.py#L98) 的 `SkillAdapter`，共 5 个方法（2 个必须实现，3 个可选覆写）。
+Adapter 是新写 Agent 时最需要理解的一层。它继承自 [prism/skill_context.py:98](prism/skill_context.py#L98) 的 `SkillAdapter`，共 5 个方法（2 个必须实现，3 个可选覆写）。
 
 ### 方法总览
 
@@ -420,7 +421,7 @@ def resolve_inputs(self, ctx: SkillContext) -> Dict[str, Any]:
     }
 ```
 
-`ctx` 是 [SkillContext](skill_context.py#L61)，提供三个入口：
+`ctx` 是 [SkillContext](prism/skill_context.py#L61)，提供三个入口：
 
 - `ctx.store` — DataStore 实例（`get_field/set_field/delete_field/ensure_field`）
 - `ctx.session_id` — 当前 session id
@@ -475,7 +476,7 @@ def get_tool_params(self) -> Dict[str, dict]:
     }
 ```
 
-框架规则（见 [skill_loader.py:209-214](skill_loader.py#L209-L214)）：
+框架规则（见 [prism/skill_loader.py:245-250](prism/skill_loader.py#L245-L250)）：
 - 在 `get_tool_params` 里声明过的字段 → LLM 传的值**覆盖** `resolve_inputs` 的值
 - 其他 LLM 传的字段，若 `pass_kwargs=True`（默认），也会透传给 handler
 
@@ -493,7 +494,7 @@ def resolve_prompt_context(self, ctx: SkillContext) -> str:
     return f"## Current Summary\n```json\n{json.dumps(summary, ensure_ascii=False, indent=2)}\n```"
 ```
 
-只有承载 `SYSTEM.md` 的那个 skill 对应的 adapter 会被调用（见 [skill_loader.py:440-458](skill_loader.py#L440-L458)），一般是 `orchestrator` skill。
+只有承载 `SYSTEM.md` 的那个 skill 对应的 adapter 会被调用（见 [prism/skill_loader.py:523-542](prism/skill_loader.py#L523-L542)），一般是 `orchestrator` skill。
 
 ### 7. `format_llm_response(tool_name, result)`（可选）
 
@@ -570,14 +571,14 @@ SYSTEM.md 内容
 
 ## Handler 编写约定
 
-Handler 是纯函数，不 import session、不 import store。所有输入都从参数进来。
+Handler 是纯函数：不 import session、不 import store、不 import client。所有输入都从参数进来——**包括 LLM 能力**：框架在每次调用前注入 `llm` 句柄（`llm.complete(messages, temperature=..., max_tokens=...) -> str`，失败抛 `LLMError`），模型按 skill 名自动路由。
 
 ```python
-def tool_translate(source_text: str = "", target_lang: str = "en", **kw) -> str:
+def tool_translate(source_text: str = "", target_lang: str = "en", llm=None, **kw) -> str:
     if not source_text:
         return json.dumps({"status": "error", "message": "empty"}, ensure_ascii=False)
 
-    # ... 业务逻辑 ...
+    # ... 业务逻辑(需要 LLM 时用 llm.complete(...)) ...
 
     return json.dumps({
         "status": "success",
@@ -596,6 +597,7 @@ def tool_translate(source_text: str = "", target_lang: str = "en", **kw) -> str:
 - **`status`**: `"success"` / `"error"`（LLM 靠它判断是否成功）
 - **`_output_data`**: 需要落库的内容。没有则表示 skill 是只读的
 - **`instant_reply`**（可选）: 立即推送给前端的一句话（无需等 LLM 生成回复）
+- **`llm`**（保留字）: 框架注入的 LLM 句柄，绑定 `agent.yaml` models 段里与 skill 同名的 key（未配置则兜底 orchestrator）。不经过 SKILL.yaml inputs / DataStore / LLM 参数。直接调用 handler（如单测）时自行传入 stub 即可——handler 单测不再需要 API key。不需要 LLM 的确定性 handler 不声明 `llm` 即可：框架按签名内省**按需注入**，严格签名（无 `**kw`）的 handler 不会被多塞参数
 - 未在 `SKILL.yaml` `inputs` 里声明的参数（如 `**kw`）会由框架按 `pass_kwargs=True` 透传，用于兼容 orchestrator 传的额外键
 
 ---
@@ -631,7 +633,7 @@ skill_dirs:
   - skills/writer_agent
 models:
   orchestrator: "deepseek-v4-flash"        # 全局兜底模型
-  # <skill_name>: "deepseek-v4-flash"      # 可选:某 skill 的专用模型,handler 里用 get_model("<skill_name>") 引用
+  # <skill_name>: "deepseek-v4-flash"      # 可选:某 skill 的专用模型,自动绑定到注入该 skill handler 的 llm 句柄
 loop:
   max_iterations: 15
   temperature: 0.3
@@ -643,7 +645,7 @@ loop:
 
 ```python
 from typing import Any, Dict
-from skill_context import SkillAdapter, SkillContext
+from prism.skill_context import SkillAdapter, SkillContext
 
 
 class SummaryAdapter(SkillAdapter):
@@ -707,12 +709,11 @@ tools:
 
 ```python
 import json
-from client import call_llm, MODELS
 from .prompts import SUMMARY_GENERATE_PROMPT
 
 
-def tool_generate_summary(article_text=None, user_query="", **kw) -> str:
-    # ... 调 LLM 抽取标题 / 要点 / 摘要（略）...
+def tool_generate_summary(article_text=None, user_query="", llm=None, **kw) -> str:
+    # ... 用注入的 llm 句柄抽取标题 / 要点 / 摘要（略）...
     result = {"title": "...", "bullets": ["...", "..."], "abstract": "..."}
     return json.dumps({
         "status": "success",
@@ -721,9 +722,10 @@ def tool_generate_summary(article_text=None, user_query="", **kw) -> str:
     }, ensure_ascii=False)
 
 
-def tool_revise_summary(summary=None, revision_request="", **kw) -> str:
-    # 注意：LLM 通过 get_tool_params 声明的 revision_request 参数传入
-    # 而 summary 由 SummaryAdapter.resolve_inputs 从 DataStore 里取出
+def tool_revise_summary(summary=None, revision_request="", llm=None, **kw) -> str:
+    # 注意：revision_request 由 LLM 经 get_tool_params 声明传入,
+    # summary 由 SummaryAdapter.resolve_inputs 从 DataStore 取出,
+    # llm 由框架注入
     # ... 略 ...
     return json.dumps({"status": "success", "summary": summary, "_output_data": {"summary": summary}}, ensure_ascii=False)
 ```
@@ -732,9 +734,9 @@ def tool_revise_summary(summary=None, revision_request="", **kw) -> str:
 
 ```python
 from pathlib import Path
-import agent
-from core import ADAPTERS_DIR
-from data_store import SQLiteDataStore
+from prism import agent
+from prism.core import ADAPTERS_DIR
+from prism.data_store import SQLiteDataStore
 
 
 def init(data_dir: Path):
@@ -762,11 +764,12 @@ def init(data_dir: Path):
                            │
 4. 校验：SummaryAdapter.validate_inputs(inputs)   [可选]
                            │
-5. 按 SKILL.yaml inputs 过滤字段 + LLM 参数覆盖
+5. 按 SKILL.yaml inputs 过滤字段 + LLM 参数覆盖,框架注入 llm 句柄
      kwargs = {
          "article_text": "...",
          "summary": {...},
          "revision_request": "把口吻改得更活泼一点",   # ← LLM 提供的
+         "llm": SkillLLM("summary"),                   # ← 框架注入(绑定 models 段同名模型)
      }
                            │
 6. tool_revise_summary(**kwargs) → 返回 JSON
@@ -783,16 +786,16 @@ def init(data_dir: Path):
 ## FAQ
 
 **Q: skill 一定要有 adapter 吗？**
-A: 想让工具"被 LLM 调用"就必须有。如果只是文档型（SKILL.md 里有指令供别的 skill 参考），可以不写 adapter，就不会被注册为 tool。也可以用框架提供的 `PassthroughAdapter`（[skill_context.py:182](skill_context.py#L182)）作为 default_adapter，把 `SkillContext` 直接传给 handler。
+A: 想让工具"被 LLM 调用"就必须有。如果只是文档型（SKILL.md 里有指令供别的 skill 参考），可以不写 adapter，就不会被注册为 tool。也可以用框架提供的 `PassthroughAdapter`（[prism/skill_context.py:182](prism/skill_context.py#L182)）作为 default_adapter，把 `SkillContext` 直接传给 handler。
 
 **Q: 一个 skill 可以有多个 adapter 吗？**
 A: 不建议。约定一个 skill 一个 adapter。如果不同工具需要不同数据来源，可以在同一个 adapter 里用工具名分支：`if tool_name == "xxx": ...`。但一般更好的做法是拆成两个 skill。
 
 **Q: DataStore 需要提前建表吗？**
-A: 不需要。`SQLiteDataStore` 会在你第一次 `set_field(session_id, "any_field", value)` 时自动 `ALTER TABLE ADD COLUMN`（见 [data_store.py:86](data_store.py#L86)）。所有字段值都以 JSON 字符串存储。
+A: 不需要。`SQLiteDataStore` 会在你第一次 `set_field(session_id, "any_field", value)` 时自动 `ALTER TABLE ADD COLUMN`（见 [prism/data_store.py:86](prism/data_store.py#L86)）。所有字段值都以 JSON 字符串存储。
 
 **Q: MODELS 里的模型别名怎么改？**
-A: 框架只内置一个兜底别名 `orchestrator`。约定：**skill 用自己的名字作别名**——handler 里 `get_model("doc_summary")`（未配置时自动兜底 orchestrator）；在 `agent.yaml` 的 `models` 段配置同名 key，即为该 skill 的专用模型。`init_agent` 启动时调 `client.configure_models(...)` 把 models 段合并进 MODELS 表。参考 [adapters/textcraft/agent.yaml](adapters/textcraft/agent.yaml)。
+A: 框架只内置一个兜底别名 `orchestrator`。约定：**skill 用自己的名字作别名**——在 `agent.yaml` 的 `models` 段配置同名 key，即为该 skill 的专用模型；框架把它绑定到注入 handler 的 `llm` 句柄上，handler 不需要自己选模型（未配置时自动兜底 orchestrator）。`init_agent` 启动时调 `client.configure_models(...)` 把 models 段合并进 MODELS 表。参考 [adapters/textcraft/agent.yaml](adapters/textcraft/agent.yaml)。
 
 **Q: 上下文压缩怎么触发？**
 A: 每轮 loop 开始前会估算 tokens，超过 `core.TOKEN_THRESHOLD`（默认 80k）就会：(1) 裁剪超长 tool output；(2) 用轻量模型对中间消息做结构化摘要。你不需要手动干预。

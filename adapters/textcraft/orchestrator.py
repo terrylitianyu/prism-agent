@@ -8,7 +8,7 @@ SYSTEM.md 所在的 skill(orchestrator)没有自己的 tool,这个 adapter 不�
 
 from typing import Any, Dict
 
-from skill_context import SkillAdapter, SkillContext
+from prism.skill_context import SkillAdapter, SkillContext
 
 
 class OrchestratorAdapter(SkillAdapter):

@@ -16,7 +16,7 @@ import json
 import time
 from pathlib import Path
 
-import agent
+from prism import agent
 from agents.textcraft import init as init_textcraft
 
 DATA_DIR = Path(".data")
