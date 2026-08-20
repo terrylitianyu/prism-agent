@@ -1,0 +1,46 @@
+name: tech_analysis
+description: "A股单股技术分析:历史行情(自动附MA5/MA20) + 实时行情 + 行业趋势 + K线图 + 技术分析报告"
+
+tools:
+  - name: get_stock_history
+    handler: handlers.tool_get_stock_history
+    description: "获取单只A股的前复权历史日K行情(默认最近一年),自动计算MA5/MA20附在数据上。同一股票相同日期范围的数据已落库时会自动复用(返回from_cache)。分析任何股票前应先调用本工具。"
+    inputs:
+      symbol: str
+      start_date: str
+      end_date: str
+      current_symbol: str
+      cached_history: dict
+    output: dict
+
+  - name: get_stock_realtime
+    handler: handlers.tool_get_stock_realtime
+    description: "获取单只A股的实时行情快照(最新价/涨跌幅/成交量/换手率/市盈率/市净率/总市值等,含数据源与时间戳)。易失数据不落库,每次调用都是当时值。"
+    inputs:
+      symbol: str
+      current_symbol: str
+    output: dict
+
+  - name: get_sector_trend
+    handler: handlers.tool_get_sector_trend
+    description: "查询个股所属行业及行业指数近1日/5日/20日涨跌幅,用于判断个股相对行业强弱。"
+    inputs:
+      symbol: str
+      current_symbol: str
+    output: dict
+
+  - name: plot_kline_chart
+    handler: handlers.tool_plot_kline_chart
+    description: "基于已获取的历史行情绘制K线图(含MA5/MA20、成交量),保存为PNG文件。需要先调用get_stock_history。"
+    inputs:
+      stock_history: dict
+    output: dict
+
+  - name: generate_tech_report
+    handler: handlers.tool_generate_tech_report
+    description: "基于已获取的历史行情(与可选的行业趋势、K线图)生成结构化技术分析报告(Markdown全文落库)。需要先调用get_stock_history。"
+    inputs:
+      stock_history: dict
+      stock_sector: dict
+      chart_path: str
+    output: dict

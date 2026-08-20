@@ -1,0 +1,25 @@
+name: hot_search
+description: "市场热点分析:个股人气榜 + 财联社电报快讯 + 热点主题提炼"
+
+tools:
+  - name: get_hot_search_rank
+    handler: handlers.tool_get_hot_search_rank
+    description: "获取A股个股人气榜(默认前10名,可选top_n: 5~30),含排名/名称/代码/涨跌幅。榜单全文落库供热点分析复用。"
+    inputs:
+      top_n: int
+    output: dict
+
+  - name: get_market_news
+    handler: handlers.tool_get_market_news
+    description: "获取财联社电报最新市场快讯(默认20条,可选count: 5~50),标题+截断内容。快讯全文落库供热点分析复用。"
+    inputs:
+      count: int
+    output: dict
+
+  - name: analyze_hot_topics
+    handler: handlers.tool_analyze_hot_topics
+    description: "基于已获取的人气榜与市场快讯提炼当前热点主题(主题/证据/相关板块/受益类型/机会/风险),Markdown报告全文落库。需要先调用get_hot_search_rank和get_market_news。"
+    inputs:
+      hot_rank: dict
+      market_news: dict
+    output: dict

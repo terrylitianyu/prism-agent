@@ -3,3 +3,6 @@ PyYAML>=6.0
 json-repair>=0.25.0
 python-dotenv>=1.0.0
 flask>=3.0.0  # 仅 demo_server.py(Web demo)需要;框架内核不依赖
+akshare>=1.14.0  # 仅 astock_analysis_agent demo 需要;需 Python>=3.9
+matplotlib>=3.8.0  # 仅 astock_analysis_agent 图表输出需要
+pandas>=2.0.0  # akshare 传递依赖,但代码直接使用,显式声明

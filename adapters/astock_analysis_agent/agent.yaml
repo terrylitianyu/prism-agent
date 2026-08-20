@@ -1,0 +1,15 @@
+name: astock_analysis_agent
+
+skill_dirs:
+  - skills/astock_analysis_agent
+
+models:
+  orchestrator: "deepseek-v4-flash"
+  tech_analysis: "deepseek-v4-flash"   # 技术报告撰写可换更强模型
+  hot_search: "deepseek-v4-flash"
+  fundamental: "deepseek-v4-flash"
+
+loop:
+  max_iterations: 14      # 单股深研需多轮工具调用(含 load_skill)
+  temperature: 0.3
+  max_tokens: 4096

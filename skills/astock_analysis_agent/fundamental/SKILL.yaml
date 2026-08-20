@@ -1,0 +1,27 @@
+name: fundamental
+description: "A股基本面财务分析:估值快照 + 近两年财务指标 + 基本面分析报告"
+
+tools:
+  - name: get_valuation
+    handler: handlers.tool_get_valuation
+    description: "获取个股估值快照(PE(TTM)/PE(静)/PB/PS/PEG/总市值/流通市值,含估值日期)。落库供基本面报告复用。"
+    inputs:
+      symbol: str
+      current_symbol: str
+    output: dict
+
+  - name: get_financials
+    handler: handlers.tool_get_financials
+    description: "获取个股近两年核心财务指标(按季度:每股收益/ROE/营收增速/净利增速/负债率/毛利率)。落库供基本面报告复用。"
+    inputs:
+      symbol: str
+      current_symbol: str
+    output: dict
+
+  - name: generate_fundamental_report
+    handler: handlers.tool_generate_fundamental_report
+    description: "基于已获取的估值与财务数据生成基本面分析报告(估值评估/成长性/资产负债/结论),Markdown全文落库。需要先调用get_valuation和get_financials。"
+    inputs:
+      stock_valuation: dict
+      stock_financials: dict
+    output: dict
