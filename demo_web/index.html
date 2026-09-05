@@ -3,57 +3,164 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Prism Agent Demo</title>
+<title>Prism Agent</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
          background: #f5f6f8; height: 100vh; display: flex; flex-direction: column; }
+  #layout { display: flex; flex: 1; min-height: 0; }
+  .hide { display: none !important; }
+
+  /* ---- 侧栏(首页/对话页共用,DeepSeek 风格) ---- */
+  #session-bar { width: 220px; flex: none; background: #fff; border-right: 1px solid #e4e7ec;
+                 display: flex; flex-direction: column; overflow-y: auto;
+                 padding: 14px 10px; gap: 10px; }
+  .brand { font-weight: 700; font-size: 15px; padding: 2px 8px; }
+  .logo-mark { color: #3964fe; }
+  #new-chat { display: block; text-align: center; background: #3964fe; color: #fff;
+              border-radius: 10px; padding: 8px 0; font-size: 13px; text-decoration: none; }
+  #new-chat:hover { background: #5686fe; }
+  #session-list { display: flex; flex-direction: column; gap: 2px; }
+  .session-item { display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+                  font-size: 13px; color: #475467; text-decoration: none;
+                  border-radius: 8px; }
+  .session-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .session-agent { flex: none; font-size: 10px; color: #98a2b3; background: #f2f4f7;
+                   padding: 1px 6px; border-radius: 999px; }
+  .session-item:hover { background: #f5f6f8; }
+  .session-item.active { background: #eef0ff; color: #3964fe; }
+  .session-item.active .session-agent { background: #e0e5ff; color: #3964fe; }
+
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  /* ---- 首页 hero(DeepSeek 风格) ---- */
+  #home-view { flex: 1; display: flex; flex-direction: column; align-items: center;
+               padding-top: 13vh; gap: 18px; background: #fff; overflow-y: auto; }
+  #wordmark { font-size: 34px; font-weight: 700; letter-spacing: 1px; color: #101828; }
+  /* Agent 小胶囊 */
+  #agent-capsule { position: relative; }
+  #agent-capsule-btn { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px;
+                       background: #fff; border: 1px solid #d0d5dd; border-radius: 999px;
+                       font-size: 13px; color: #344054; cursor: pointer; font-family: inherit; }
+  #agent-capsule-btn:hover { border-color: #3964fe; color: #3964fe; }
+  #agent-capsule-btn .chev { font-size: 10px; color: #98a2b3; }
+  #agent-menu { position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+                background: #fff; border: 1px solid #e4e7ec; border-radius: 10px;
+                box-shadow: 0 8px 24px rgba(16,24,40,.12); min-width: 210px; padding: 6px;
+                display: flex; flex-direction: column; z-index: 10; }
+  .agent-option { padding: 8px 10px; font-size: 13px; color: #344054; border-radius: 6px;
+                  cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+  .agent-option:hover { background: #f5f6f8; }
+  .agent-option .check { color: #3964fe; }
+  /* 大输入框 */
+  #home-input-wrap { position: relative; width: min(720px, 86vw); }
+  #home-input { width: 100%; min-height: 52px; max-height: 160px; padding: 14px 56px 14px 18px;
+                font-size: 15px; font-family: inherit; line-height: 1.5; color: #101828;
+                border: 1px solid #d0d5dd; border-radius: 26px; outline: none; resize: none;
+                display: block; }
+  #home-input:focus { border-color: #3964fe; box-shadow: 0 0 0 3px rgba(57,100,254,.12); }
+  #home-send { position: absolute; right: 9px; bottom: 9px; width: 34px; height: 34px;
+               border-radius: 50%; border: none; background: #d0d5dd; color: #fff;
+               font-size: 16px; cursor: pointer; display: flex; align-items: center;
+               justify-content: center; }
+  #home-send.enabled { background: #3964fe; }
+  #home-send.enabled:hover { background: #5686fe; }
+  #home-hint { font-size: 12px; color: #98a2b3; text-align: center; }
+
+  /* ---- 对话 view ---- */
+  #chat-view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   header { background: #fff; border-bottom: 1px solid #e4e7ec; padding: 10px 16px;
            display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  header .logo { font-weight: 700; font-size: 16px; }
-  header select { padding: 6px 10px; border: 1px solid #d0d5dd; border-radius: 6px; }
-  .btn { padding: 6px 14px; background: #444ce7; color: #fff; border: none;
-         border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .btn:hover { background: #3538cd; }
+  .btn { padding: 6px 14px; background: #3964fe; color: #fff; border: none;
+         border-radius: 6px; cursor: pointer; font-size: 13px; font-family: inherit; }
+  .btn:hover { background: #5686fe; }
+  #agent-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
+                 border: 1px solid #d0d5dd; border-radius: 6px; font-size: 13px;
+                 color: #475467; background: #f9fafb; }
+  #agent-badge b { color: #3964fe; }
   #state-bar { display: flex; gap: 8px; margin-left: auto; font-size: 12px; }
-  .chip { background: #eef0ff; color: #3538cd; padding: 4px 10px; border-radius: 999px; }
+  .chip { background: #eef0ff; color: #3964fe; padding: 4px 10px; border-radius: 999px; }
   .chip.off { background: #f2f4f7; color: #98a2b3; }
   #messages { flex: 1; overflow-y: auto; padding: 20px 16px; display: flex;
               flex-direction: column; gap: 10px; max-width: 860px; width: 100%;
               margin: 0 auto; }
   .msg { max-width: 78%; padding: 10px 14px; border-radius: 12px; line-height: 1.6;
          white-space: pre-wrap; word-break: break-word; font-size: 14px; }
-  .msg.user { align-self: flex-end; background: #444ce7; color: #fff; }
+  .msg.user { align-self: flex-end; background: #3964fe; color: #fff; }
   .msg.agent { align-self: flex-start; background: #fff; border: 1px solid #e4e7ec; }
   .evt { align-self: center; font-size: 12px; color: #667085; background: #fff;
          border: 1px dashed #d0d5dd; padding: 4px 12px; border-radius: 999px; }
   .evt.instant { color: #067647; border-color: #a6f4c5; background: #ecfdf3; }
   .evt.error { color: #b42318; border-color: #fecdca; background: #fef3f2; }
   .evt.usage { color: #98a2b3; border: none; background: none; }
+  .evt.tool { align-self: flex-start; display: flex; flex-direction: column; gap: 6px;
+              padding: 5px 12px; border-radius: 8px; max-width: 100%; }
+  .tool-head { display: flex; align-items: center; gap: 6px; }
+  .evt.tool.done .tool-head { cursor: pointer; }
+  .tool-chev { color: #98a2b3; font-size: 10px; transition: transform 0.15s; }
+  .evt.tool.expanded .tool-chev { transform: rotate(180deg); }
+  .tool-body { display: none; margin: 0; padding: 8px; font-size: 11px; line-height: 1.5;
+               color: #475467; background: #f9fafb; border-radius: 6px;
+               white-space: pre-wrap; word-break: break-word;
+               max-height: 320px; overflow-y: auto; }
+  .evt.tool.expanded .tool-body { display: block; }
+  .evt.thinking { align-self: flex-start; display: flex; align-items: center; gap: 8px;
+                  border-style: solid; }
+  .think-dots { display: inline-flex; gap: 3px; }
+  .think-dots span { width: 4px; height: 4px; background: #667085; border-radius: 50%;
+                     animation: dot-blink 1.2s infinite; }
+  .think-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .think-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes dot-blink { 0%, 80%, 100% { opacity: 0.2; } 40% { opacity: 1; } }
+  .tool-mark { font-weight: 700; }
+  .tool-mark.ok { color: #067647; }
+  .tool-mark.bad { color: #b42318; }
+  .spinner { width: 11px; height: 11px; border: 2px solid #c3c9d6;
+             border-top-color: #3964fe; border-radius: 50%;
+             animation: spin 0.7s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   #input-bar { background: #fff; border-top: 1px solid #e4e7ec; padding: 12px 16px; }
   #input-row { display: flex; gap: 10px; max-width: 860px; margin: 0 auto; }
   #msg-input { flex: 1; padding: 10px 14px; border: 1px solid #d0d5dd;
-               border-radius: 8px; font-size: 14px; outline: none; }
-  #msg-input:focus { border-color: #444ce7; }
+               border-radius: 8px; font-size: 14px; outline: none; font-family: inherit; }
+  #msg-input:focus { border-color: #3964fe; }
 </style>
 </head>
 <body>
-<header>
-  <span class="logo">◈ Prism Agent</span>
-  <select id="agent-select"></select>
-  <label class="btn" for="file-input">📎 上传文档</label>
-  <input type="file" id="file-input" hidden>
-  <div id="state-bar">
-    <span class="chip off" id="chip-doc">未上传</span>
-    <span class="chip off" id="chip-type">未识别</span>
-    <span class="chip off" id="chip-summary">未摘要</span>
-  </div>
-</header>
-<div id="messages"></div>
-<div id="input-bar">
-  <div id="input-row">
-    <input id="msg-input" placeholder="输入消息,回车发送…" autofocus>
-    <button class="btn" id="send-btn">发送</button>
+<div id="layout">
+  <aside id="session-bar">
+    <div class="brand"><span class="logo-mark">◈</span> Prism Agent</div>
+    <a id="new-chat" href="/">＋ 新对话</a>
+    <div id="session-list"></div>
+  </aside>
+  <div id="main">
+    <div id="home-view">
+      <div id="wordmark"><span class="logo-mark">◈</span> Prism Agent</div>
+      <div id="agent-capsule">
+        <button id="agent-capsule-btn"><span id="agent-capsule-name"></span><span class="chev">▾</span></button>
+        <div id="agent-menu" class="hide"></div>
+      </div>
+      <div id="home-input-wrap">
+        <textarea id="home-input" placeholder="给 Prism Agent 发消息…" rows="1"></textarea>
+        <button id="home-send" title="发送">↑</button>
+      </div>
+      <div id="home-hint">选择 Agent 并发送首轮消息后,将创建会话并进入对话</div>
+    </div>
+    <div id="chat-view" class="hide">
+      <header>
+        <span id="agent-badge" class="hide" title="该会话所属 Agent"><span id="agent-badge-lock" class="hide">🔒 </span><b id="agent-badge-name"></b></span>
+        <label class="btn hide" for="file-input" id="upload-btn">📎 上传文档</label>
+        <input type="file" id="file-input" hidden>
+        <div id="state-bar"></div>
+      </header>
+      <div id="messages"></div>
+      <div id="input-bar">
+        <div id="input-row">
+          <input id="msg-input" placeholder="输入消息,回车发送…">
+          <button class="btn" id="send-btn">发送</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -61,6 +168,13 @@
 const $ = (id) => document.getElementById(id);
 const messages = $("messages");
 let sending = false;
+let pendingTool = null;  // 正在执行中的工具 pill(一次只有一个工具在跑)
+let thinkingEl = null;   // "Thinking…"等待指示(LLM 思考期间无事件,用它表示没卡住)
+let activeSession = null;  // 当前会话 id(进入 /s/<sid> 后才有)
+let activeMessages = 0;    // 当前会话的消息数(>0 则 🔒 锁定标注)
+let currentAgent = null;   // 当前服务端 agent(首页胶囊与对话标注共用)
+
+/* ---------- 通用消息/事件绘制 ---------- */
 
 function addMsg(role, text) {
   const div = document.createElement("div");
@@ -77,42 +191,251 @@ function addEvt(text, cls = "") {
   div.textContent = text;
   messages.appendChild(div);
   messages.scrollTop = messages.scrollHeight;
+  return div;
 }
+
+function renderEvent(evt) {
+  const {event, data} = evt;
+  if (event === "tool_call") {
+    hideThinking();
+    const args = Object.entries(data.args || {}).map(([k, v]) => `${k}=${v}`).join(", ");
+    pendingTool = {el: addToolPill(`🔧 ${data.name}(${args})`)};
+  } else if (event === "tool_result") {
+    // 结果存进 pill 的折叠区,点击"跑完的工具"展开查看全部结果
+    const result = String(data.result || "");
+    if (pendingTool) {
+      markToolDone(pendingTool.el, result);
+      pendingTool = null;
+    } else {
+      markToolDone(addToolPill(`🔧 ${data.name || "tool"}`), result);
+    }
+    showThinking();  // 工具完成后进入下一轮 LLM 思考
+  } else if (event === "instant_reply") {
+    addEvt(`⚡ ${data}`, "instant");
+    if (thinkingEl) messages.appendChild(thinkingEl);  // 等待指示挪到最新一行之后
+  } else if (event === "done") {
+    hideThinking();
+    finishPendingTool();
+    addMsg("agent", data);
+  } else if (event === "error") {
+    hideThinking();
+    finishPendingTool();
+    addEvt(`❌ ${data}`, "error");
+  } else if (event === "usage") {
+    addEvt(`tokens: ${data.total_tokens}`, "usage");
+  }
+}
+
+// 工具 pill:头部(转圈/✓/✗ + 名称)+ 折叠区(完整结果,点击头部展开/收起)
+function addToolPill(label) {
+  const pill = document.createElement("div");
+  pill.className = "evt tool";
+  const head = document.createElement("div");
+  head.className = "tool-head";
+  const spinner = document.createElement("span");
+  spinner.className = "spinner";  // 旋转中的小圆点 = 工具正在执行
+  const labelEl = document.createElement("span");
+  labelEl.textContent = label;
+  head.append(spinner, labelEl);
+  const body = document.createElement("pre");
+  body.className = "tool-body";
+  pill.append(head, body);
+  messages.appendChild(pill);
+  messages.scrollTop = messages.scrollHeight;
+  return pill;
+}
+
+// 执行完毕:转圈换成 ✓/✗、加展开箭头、结果塞进折叠区
+function markToolDone(pill, result) {
+  const head = pill.querySelector(".tool-head");
+  const spinner = head.querySelector(".spinner");
+  if (spinner) spinner.remove();
+  let ok = true;
+  try { ok = JSON.parse(result || "{}").status !== "error"; } catch {}
+  const mark = document.createElement("span");
+  mark.className = `tool-mark ${ok ? "ok" : "bad"}`;
+  mark.textContent = ok ? "✓" : "✗";
+  head.prepend(mark);
+  const chev = document.createElement("span");
+  chev.className = "tool-chev";
+  chev.textContent = "▾";
+  head.appendChild(chev);
+  pill.querySelector(".tool-body").textContent = result;
+  pill.classList.add("done");
+}
+
+// 等待指示:Thinking + 三个动态小点(LLM 思考期间内核不发事件,用它表示"没卡住")
+function showThinking() {
+  if (thinkingEl) return;
+  thinkingEl = document.createElement("div");
+  thinkingEl.className = "evt thinking";
+  const label = document.createElement("span");
+  label.textContent = "Thinking";
+  const dots = document.createElement("span");
+  dots.className = "think-dots";
+  for (let i = 0; i < 3; i++) dots.appendChild(document.createElement("span"));
+  thinkingEl.append(label, dots);
+  messages.appendChild(thinkingEl);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function hideThinking() {
+  if (!thinkingEl) return;
+  thinkingEl.remove();
+  thinkingEl = null;
+}
+
+// 异常收尾:若工具还没收到 tool_result 就结束了,把转圈图标摘掉,避免一直转
+function finishPendingTool() {
+  if (!pendingTool) return;
+  const spinner = pendingTool.el.querySelector(".spinner");
+  if (spinner) spinner.remove();
+  pendingTool = null;
+}
+
+/* ---------- SSE 流:chat 共用的执行器 ---------- */
+
+async function runStream(body, onSession) {
+  const resp = await fetch("/api/chat", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok || !(resp.headers.get("content-type") || "").includes("text/event-stream")) {
+    const errBody = await resp.json().catch(() => ({}));
+    throw new Error(errBody.error || `HTTP ${resp.status}`);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, {stream: true});
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const chunk = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 2);
+      if (!chunk.startsWith("data: ")) continue;
+      const evt = JSON.parse(chunk.slice(6));
+      if (evt.event === "session") {
+        // 首轮消息:服务端刚创建的会话 id → 跳转 /s/<sid> 并进入对话视图
+        activeSession = evt.data.id;
+        history.pushState({}, "", `/s/${encodeURIComponent(activeSession)}`);
+        enterChatView();
+        if (onSession) onSession();
+        loadSessions();
+        continue;
+      }
+      renderEvent(evt);
+    }
+  }
+}
+
+function enterChatView() {
+  $("home-view").classList.add("hide");
+  $("chat-view").classList.remove("hide");
+}
+
+/* ---------- 首页 ---------- */
 
 async function loadAgents() {
   const r = await fetch("/api/agents").then(r => r.json());
-  const sel = $("agent-select");
-  sel.innerHTML = "";
+  currentAgent = r.current;
+  $("agent-capsule-name").textContent = currentAgent;
+  const menu = $("agent-menu");
+  menu.innerHTML = "";
   for (const name of r.agents) {
-    const opt = document.createElement("option");
-    opt.value = opt.textContent = name;
-    if (name === r.current) opt.selected = true;
-    sel.appendChild(opt);
+    const div = document.createElement("div");
+    div.className = "agent-option";
+    div.textContent = name;
+    if (name === currentAgent) {
+      const check = document.createElement("span");
+      check.className = "check";
+      check.textContent = "✓";
+      div.appendChild(check);
+    }
+    div.addEventListener("click", () => pickAgent(name));
+    menu.appendChild(div);
   }
-  refreshState();
 }
 
-async function selectAgent() {
-  const name = $("agent-select").value;
+async function pickAgent(name) {
+  if (sending) return;
+  toggleMenu(false);
+  if (name === currentAgent) return;
   await fetch("/api/select", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({agent: name}),
   });
-  messages.innerHTML = "";
-  addEvt(`已切换到 agent: ${name}`);
+  await loadAgents();    // 刷新胶囊与菜单勾选
+  await loadSessions();  // 侧栏会话列表按 agent 隔离
+}
+
+function toggleMenu(show) {
+  $("agent-menu").classList.toggle("hide", !show);
+}
+
+async function startChat() {
+  if (sending) return;
+  const text = $("home-input").value.trim();
+  if (!text) return;
+  sending = true;
+  $("home-input").disabled = true;
+  $("home-send").classList.remove("enabled");
+  let entered = false;  // 是否已收到 session 事件进入对话视图
+  try {
+    await runStream({message: text, agent: currentAgent}, () => {
+      entered = true;
+      addMsg("user", text);   // 首轮用户消息补画进对话区
+      activeMessages = 1;
+      updateLockBadge();
+      showThinking();
+    });
+  } catch (err) {
+    if (entered) addEvt(`请求失败: ${err.message}`, "error");
+    else $("home-hint").textContent = `请求失败: ${err.message}`;
+  }
+  hideThinking();
+  $("home-input").value = "";
+  $("home-input").disabled = false;
+  sending = false;
+  refreshState();
+}
+
+/* ---------- 对话页 ---------- */
+
+async function sendMessage(preset) {
+  if (sending || !activeSession) return;
+  const input = $("msg-input");
+  const text = preset || input.value.trim();
+  if (!text) return;
+  if (!preset) input.value = "";
+  addMsg("user", text);
+  sending = true;
+  showThinking();  // 首轮 LLM 调用前的等待
+  if (activeMessages === 0) { activeMessages = 1; updateLockBadge(); }
+  try {
+    await runStream({message: text, session_id: activeSession});
+  } catch (err) {
+    hideThinking();
+    addEvt(`请求失败: ${err.message}`, "error");
+  }
+  hideThinking();  // 流结束兜底:摘掉等待指示
+  sending = false;
   refreshState();
 }
 
 async function uploadFile(e) {
   const file = e.target.files[0];
-  if (!file) return;
+  if (!file || !activeSession) return;
   const fd = new FormData();
   fd.append("file", file);
+  fd.append("session_id", activeSession);
   const r = await fetch("/api/upload", {method: "POST", body: fd}).then(r => r.json());
   if (r.ok) {
     addEvt(`📎 已上传 ${r.filename}(${r.chars} 字符)`);
     refreshState();
-    sendMessage("我上传了一份文档");  // 复现"上传无指令"场景
+    if (r.auto_message) sendMessage(r.auto_message);
   } else {
     addEvt(`上传失败: ${r.error}`, "error");
   }
@@ -120,79 +443,129 @@ async function uploadFile(e) {
 }
 
 async function refreshState() {
-  const s = await fetch("/api/state").then(r => r.json());
-  setChip("chip-doc", s.document_chars ? `文档 ${s.document_chars} 字符` : "未上传", !!s.document_chars);
-  setChip("chip-type", s.doc_type_label || "未识别", !!s.doc_type);
-  setChip("chip-summary", s.has_summary ? "已摘要" : "未摘要", !!s.has_summary);
-}
-
-function setChip(id, text, on) {
-  const el = $(id);
-  el.textContent = text;
-  el.className = on ? "chip" : "chip off";
-}
-
-async function sendMessage(preset) {
-  if (sending) return;
-  const input = $("msg-input");
-  const text = preset || input.value.trim();
-  if (!text) return;
-  if (!preset) input.value = "";
-  addMsg("user", text);
-  sending = true;
-
-  try {
-    const resp = await fetch("/api/chat", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({message: text}),
-    });
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    while (true) {
-      const {done, value} = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, {stream: true});
-      let idx;
-      while ((idx = buf.indexOf("\n\n")) >= 0) {
-        const chunk = buf.slice(0, idx).trim();
-        buf = buf.slice(idx + 2);
-        if (!chunk.startsWith("data: ")) continue;
-        const evt = JSON.parse(chunk.slice(6));
-        renderEvent(evt);
-      }
-    }
-  } catch (err) {
-    addEvt(`请求失败: ${err.message}`, "error");
+  if (!activeSession) return;  // 首页无会话,无状态可拉
+  const s = await fetch(`/api/state?session_id=${encodeURIComponent(activeSession)}`).then(r => r.json());
+  // 上传入口:仅当前 agent 声明了 handle_upload 时显示
+  $("upload-btn").classList.toggle("hide", !s.upload);
+  // 状态 chip:由当前 agent 的 get_state 决定内容,无则清空
+  const bar = $("state-bar");
+  bar.innerHTML = "";
+  for (const c of s.chips || []) {
+    const span = document.createElement("span");
+    span.className = c.on ? "chip" : "chip off";
+    span.textContent = `${c.label} ${c.value}`;
+    bar.appendChild(span);
   }
+}
+
+// 会话锁定:有对话记录后显示 🔒(Agent 归属标注常驻 header)
+function updateLockBadge() {
+  $("agent-badge-lock").classList.toggle("hide", activeMessages === 0);
+}
+
+/* ---------- 侧栏 ---------- */
+
+async function loadSessions() {
+  const s = await fetch("/api/sessions").then(r => r.json());
+  const list = $("session-list");
+  list.innerHTML = "";
+  const cur = decodeURIComponent(location.pathname.replace(/^\/s\//, ""));
+  for (const it of s.sessions) {
+    const a = document.createElement("a");
+    a.className = "session-item" + (it.id === cur ? " active" : "");
+    a.href = `/s/${encodeURIComponent(it.id)}`;
+    const title = document.createElement("span");
+    title.className = "session-title";
+    title.textContent = it.title || "新会话";
+    const tag = document.createElement("span");
+    tag.className = "session-agent";
+    tag.textContent = it.agent;
+    a.append(title, tag);
+    list.appendChild(a);
+  }
+}
+
+/* ---------- 路由 ---------- */
+
+async function openHome() {
   sending = false;
+  activeSession = null;
+  activeMessages = 0;
+  $("chat-view").classList.add("hide");
+  $("home-view").classList.remove("hide");
+  $("home-hint").textContent = "选择 Agent 并发送首轮消息后,将创建会话并进入对话";
+  $("home-input").disabled = false;
+  await loadAgents();
+  await loadSessions();
+}
+
+async function openChat(sid) {
+  $("home-view").classList.add("hide");
+  $("chat-view").classList.remove("hide");
+  messages.innerHTML = "";
+  hideThinking();
+  pendingTool = null;
+  activeSession = sid;
+  const resp = await fetch(`/api/sessions/${encodeURIComponent(sid)}/history`);
+  if (!resp.ok) {
+    $("agent-badge").classList.add("hide");
+    addEvt("会话不存在或已失效", "error");
+    const back = addEvt("← 回到首页", "instant");
+    back.style.cursor = "pointer";
+    back.addEventListener("click", () => location.href = "/");
+    return;
+  }
+  const s = await resp.json();
+  currentAgent = s.agent;
+  $("agent-badge-name").textContent = s.agent;
+  $("agent-badge").classList.remove("hide");
+  activeMessages = (s.history || []).length;
+  for (const h of s.history || []) addMsg(h.role, h.content);
+  updateLockBadge();
+  await loadAgents();    // 首页胶囊同步当前 agent(返回首页时一致)
+  await loadSessions();
   refreshState();
 }
 
-function renderEvent(evt) {
-  const {event, data} = evt;
-  if (event === "tool_call") {
-    const args = Object.entries(data.args || {}).map(([k, v]) => `${k}=${v}`).join(", ");
-    addEvt(`🔧 ${data.name}(${args})`);
-  } else if (event === "instant_reply") {
-    addEvt(`⚡ ${data}`, "instant");
-  } else if (event === "done") {
-    addMsg("agent", data);
-  } else if (event === "error") {
-    addEvt(`❌ ${data}`, "error");
-  } else if (event === "usage") {
-    addEvt(`tokens: ${data.total_tokens}`, "usage");
-  }
+function route() {
+  const m = location.pathname.match(/^\/s\/([\w-]+)$/);
+  if (m) openChat(decodeURIComponent(m[1]));
+  else openHome();
 }
+window.addEventListener("popstate", route);
 
-$("agent-select").addEventListener("change", selectAgent);
+/* ---------- 事件绑定 ---------- */
+
+$("agent-capsule-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleMenu($("agent-menu").classList.contains("hide"));
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#agent-capsule")) toggleMenu(false);
+});
+$("home-send").addEventListener("click", () => startChat());
+$("home-input").addEventListener("input", () => {
+  $("home-send").classList.toggle("enabled", $("home-input").value.trim().length > 0);
+  $("home-input").style.height = "auto";
+  $("home-input").style.height = Math.min($("home-input").scrollHeight, 160) + "px";
+});
+$("home-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); startChat(); }
+});
 $("file-input").addEventListener("change", uploadFile);
 $("send-btn").addEventListener("click", () => sendMessage());
 $("msg-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendMessage();
 });
+// 点击跑完的工具 pill 头部,展开/收起完整结果
+messages.addEventListener("click", (e) => {
+  const head = e.target.closest(".tool-head");
+  if (!head) return;
+  const pill = head.parentElement;
+  if (pill.classList.contains("done")) pill.classList.toggle("expanded");
+});
 
-loadAgents();
+route();
 </script>
 </body>
 </html>
