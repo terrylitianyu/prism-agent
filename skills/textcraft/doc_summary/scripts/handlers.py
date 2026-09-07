@@ -145,15 +145,27 @@ def tool_generate_summary(document_text: str = "", doc_category: str = "",
         return _error("empty document_text")
 
     inline: dict = {}
+    degraded = ""  # 降级提示:仅"分类结果存在但模板不支持"的分化场景出现(缺失/无二级为正常路径)
     category = resolve_category(doc_category)
     if category is None:
         # 兜底:用户上传后直接要求摘要(未走 classify_document)→ 内联一级分类
+        if doc_category:
+            logger.warning(f"doc_category '{doc_category}' unknown to summary "
+                           f"templates, inline re-classify")
+            degraded = f"文档分类({doc_category})未被摘要模板识别,已重新识别"
         category = _inline_classify(document_text, llm)
         subtype = None
         inline = {"doc_category": category,
                   "doc_category_label": SUMMARY_TEMPLATES[category]["label"]}
+        if degraded:
+            degraded += f"为{SUMMARY_TEMPLATES[category]['label']}"
     else:
         subtype = valid_subtype_or_none(category, doc_subtype)
+        if doc_subtype and subtype is None:
+            logger.warning(f"subtype '{doc_subtype}' unknown for category "
+                           f"'{category}', dropped")
+            degraded = (f"二级分类({doc_subtype})未被摘要模板识别,已按一级分类"
+                        f"({SUMMARY_TEMPLATES[category]['label']})生成")
 
     try:
         if len(document_text) > LONG_DOC_THRESHOLD:
@@ -168,6 +180,8 @@ def tool_generate_summary(document_text: str = "", doc_category: str = "",
     except Exception as e:
         return _error(f"LLM call failed: {e}")
 
+    if degraded:
+        note = f"{degraded}。{note}" if note else degraded
     subtype_label = SUBTYPE_HINTS.get(category, {}).get(subtype, {}).get("label") \
         if subtype else None
     output = {
@@ -196,6 +210,11 @@ def tool_revise_summary(summary=None, revision_request: str = "", document_text:
         return _error("missing revision_request")
 
     category = resolve_category(doc_category)
+    degraded = ""
+    if doc_category and category is None:
+        logger.warning(f"doc_category '{doc_category}' unknown, revise keeps "
+                       f"original field structure")
+        degraded = "提示:文档分类未被摘要模板识别,已保持原摘要字段结构"
     include_text = bool(document_text) and len(document_text) <= LONG_DOC_THRESHOLD
     prompt = build_revise_prompt(summary, revision_request,
                                  document_text if include_text else None, category)
@@ -206,6 +225,8 @@ def tool_revise_summary(summary=None, revision_request: str = "", document_text:
     except Exception as e:
         return _error(f"LLM call failed: {e}")
 
+    if degraded:
+        note = f"{degraded}。{note}" if note else degraded
     return json.dumps({
         "status": "success",
         "summary": new_summary,

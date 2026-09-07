@@ -1,7 +1,8 @@
 name: textcraft
 
 skill_dirs:
-  - skills/textcraft
+  - skills/textcraft            # doc_summary + orchestrator(SYSTEM.md)
+  - common_skills/doc_classify  # 从通用 skill 池只引入 doc_classify(叶子目录=逐个指定)
 
 models:
   orchestrator: "deepseek-v4-flash"

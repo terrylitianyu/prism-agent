@@ -95,9 +95,12 @@ prism_agent/
 ├── agents/               # One <agent>.py per agent, exposing an init() entry
 │   ├── __init__.py
 │   └── textcraft.py      # example agent entry
-└── skills/               # One subdirectory per agent, holding one subdirectory per skill
+├── skills/               # One subdirectory per agent, holding one subdirectory per skill
+│   ├── __init__.py
+│   └── textcraft/        # example: doc_summary skill + orchestrator
+└── common_skills/        # shared pool of agent-agnostic skills (picked per leaf directory in skill_dirs)
     ├── __init__.py
-    └── textcraft/        # example: doc_classify + doc_summary skills + orchestrator
+    └── doc_classify/     # example: document classification skill, used by textcraft
 ```
 
 ---
@@ -210,6 +213,7 @@ name: my_agent
 
 skill_dirs:
   - skills/my_agent
+  # - common_skills/doc_classify  # optional: pull from the shared skill pool — each entry may point at a single skill's leaf directory; unlisted skills are not loaded
 
 models:
   orchestrator: "deepseek-v4-flash"        # global fallback model
@@ -307,10 +311,10 @@ That's a minimal working agent. The next section explains the Adapter layer in d
 The repo ships a complete, runnable example agent **textcraft** (document processing: type classification + type-specific structured summaries) that exercises every convention in this README:
 
 ```
-skills/textcraft/doc_classify/    # classification skill (sampled classify, cheap model)
+common_skills/doc_classify/       # classification skill (sampled classify, cheap model; generic capability, lives in the shared pool)
 skills/textcraft/doc_summary/     # summary skill (structured summaries + revision; long docs chunked)
 skills/textcraft/orchestrator/    # SYSTEM.md (orchestration instructions)
-adapters/textcraft/               # agent.yaml (per-skill models) + three adapters
+adapters/textcraft/               # agent.yaml (per-skill models; skill_dirs pulls doc_classify from common_skills) + three adapters
 agents/textcraft.py               # agent entry
 demo_cli.py                       # interactive CLI
 demo_server.py + demo_web/        # web demo (Flask + single-page frontend)

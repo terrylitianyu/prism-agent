@@ -95,9 +95,12 @@ prism_agent/
 ├── agents/               # 每个 agent 一个 <agent>.py，提供 init() 入口
 │   ├── __init__.py
 │   └── textcraft.py      # 示例 agent 入口
-└── skills/               # 每个 agent 一个子目录，下辖若干 skill（每 skill 一个子目录）
+├── skills/               # 每个 agent 一个子目录，下辖若干 skill（每 skill 一个子目录）
+│   ├── __init__.py
+│   └── textcraft/        # 示例：doc_summary skill + orchestrator
+└── common_skills/        # 跨 agent 复用的通用 skill 池（在 skill_dirs 里按叶子目录逐个引入）
     ├── __init__.py
-    └── textcraft/        # 示例：doc_classify + doc_summary skill + orchestrator
+    └── doc_classify/     # 示例：文档分类 skill，textcraft 引用
 ```
 
 ---
@@ -209,6 +212,7 @@ name: my_agent
 
 skill_dirs:
   - skills/my_agent
+  # - common_skills/doc_classify  # 可选:从共享 skill 池引入——每项可指到单个 skill 叶子目录,未列出的不加载
 
 models:
   orchestrator: "deepseek-v4-flash"        # 全局兜底模型
@@ -306,10 +310,10 @@ for event in agent.agent_loop_stream("请把它翻译成英文", conversation_hi
 仓库内置了一个完整可跑的示例 agent **textcraft**（文档处理：类型识别 + 按类型的结构化摘要），覆盖本 README 的全部约定，可直接运行体验：
 
 ```
-skills/textcraft/doc_classify/    # 分类 skill(采样分类,配便宜模型)
+common_skills/doc_classify/       # 分类 skill(采样分类,配便宜模型;通用能力,放共享池)
 skills/textcraft/doc_summary/     # 摘要 skill(结构化摘要 + 按需修订,长文自动分块)
 skills/textcraft/orchestrator/    # SYSTEM.md(编排指令)
-adapters/textcraft/               # agent.yaml(按 skill 分档模型)+ 三个 adapter
+adapters/textcraft/               # agent.yaml(按 skill 分档模型;skill_dirs 从 common_skills 引入 doc_classify)+ 三个 adapter
 agents/textcraft.py               # agent 入口
 demo_cli.py                       # 交互式 CLI
 demo_server.py + demo_web/        # Web demo(Flask + 单页前端)
