@@ -97,7 +97,7 @@ prism_agent/
 │   └── textcraft.py      # 示例 agent 入口
 └── skills/               # 每个 agent 一个子目录，下辖若干 skill（每 skill 一个子目录）
     ├── __init__.py
-    └── textcraft/        # 示例：doc_summary skill + orchestrator
+    └── textcraft/        # 示例：doc_classify + doc_summary skill + orchestrator
 ```
 
 ---
@@ -306,15 +306,20 @@ for event in agent.agent_loop_stream("请把它翻译成英文", conversation_hi
 仓库内置了一个完整可跑的示例 agent **textcraft**（文档处理：类型识别 + 按类型的结构化摘要），覆盖本 README 的全部约定，可直接运行体验：
 
 ```
-skills/textcraft/doc_summary/     # skill(两个 tool:classify_document / generate_summary)
+skills/textcraft/doc_classify/    # 分类 skill(采样分类,配便宜模型)
+skills/textcraft/doc_summary/     # 摘要 skill(结构化摘要 + 按需修订,长文自动分块)
 skills/textcraft/orchestrator/    # SYSTEM.md(编排指令)
-adapters/textcraft/               # agent.yaml + 两个 adapter
+adapters/textcraft/               # agent.yaml(按 skill 分档模型)+ 三个 adapter
 agents/textcraft.py               # agent 入口
 demo_cli.py                       # 交互式 CLI
 demo_server.py + demo_web/        # Web demo(Flask + 单页前端)
 ```
 
-设计要点:用户上传文档后,`classify_document` 只做**采样分类**(前 3000 字符,低成本),识别结果 `doc_type` 落库;`generate_summary` 从 DataStore 读取共享的 `doc_type`,生成类型专属的结构化摘要(论文/小说/新闻/其他),未分类时自动兜底。上传后没有指令时,agent 只告知类型并询问意图,不会直接生成摘要。
+设计要点:
+- **二级分类**:一级按"功能目的"分 5 类(信息传递型 / 故事叙述型 / 观点说服型 / 步骤指令型 / 其他),二级按文体细分 20 类(论文、新闻、合同、法律文书、小说、演讲稿、菜谱……)。`classify_document` 只做**采样分类**(头 2000 + 尾 1000 字符,便宜模型),结果 `doc_category`/`doc_subtype`/置信度落库;把握不足(置信 < 0.6)兜底"其他",绝不硬猜。
+- **分层摘要模板**:`generate_summary` 按一级大类套模板(每类一个 JSON schema,必填字段校验 + 一次重试),二级文体按需附加字段(合同加签约双方/金额/期限,新闻加来源/时间/地点,菜谱加份量/时间……);长文档(> 2 万字符)自动分块 Map-Reduce;字段缺失自动重试、仍缺补默认值。
+- **修订与复用**:`revise_summary` 按用户要求修改现有摘要而不重新生成(省钱);上传按内容 md5 判重,同一文档重传保留全部状态、不重复分类/摘要。
+- 上传后没有指令时,agent 只告知类型并询问意图,不会直接生成摘要。
 
 **跑 CLI**:
 

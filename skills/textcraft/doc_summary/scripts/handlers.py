@@ -11,90 +11,205 @@ import logging
 
 from json_repair import repair_json
 
-from .prompts import CLASSIFY_PROMPT, TYPE_LABELS, build_summary_prompt
+from .prompts import (FALLBACK_CLASSIFY_PROMPT, build_block_summary_prompt,
+                      build_merge_prompt, build_revise_prompt,
+                      build_summary_prompt)
+from .summary_taxonomy import (SUMMARY_TEMPLATES, SUBTYPE_HINTS, extension_for,
+                               field_default, required_fields, resolve_category,
+                               valid_subtype_or_none)
+from .text_utils import LONG_DOC_THRESHOLD, chunk_text, md5_of
 
 logger = logging.getLogger(__name__)
 
-DOC_TYPES = tuple(TYPE_LABELS.keys())  # ("paper", "novel", "news", "general")
-CLASSIFY_SAMPLE_CHARS = 3000  # 分类只需采样,不用全文(与摘要成本分层)
+INLINE_SAMPLE_CHARS = 2000  # 内联兜底分类的采样长度
+_BLOCK_PLACEHOLDER = "(本块内容无法提取)"
 
 
-def _classify(document_text: str, llm) -> str:
-    """用注入的 llm 句柄对文档采样分类。
+def _error(message: str, **extra) -> str:
+    return json.dumps({"status": "error", "message": message, **extra}, ensure_ascii=False)
 
-    任何失败(异常 / 无法解析)一律兜底 "general"——
-    分类是廉价可重试步骤,不阻断主流程。
+
+def _inline_classify(document_text: str, llm) -> str:
+    """doc_category 缺失时的兜底:一级-only 分类,不复制 doc_classify 完整 taxonomy。
+
+    任何失败一律兜底 "general"——分类是廉价可重试步骤,不阻断主流程。
     """
     try:
         raw = llm.complete(
             messages=[{
                 "role": "user",
-                "content": CLASSIFY_PROMPT.format(text=document_text[:CLASSIFY_SAMPLE_CHARS]),
+                "content": FALLBACK_CLASSIFY_PROMPT.format(
+                    text=document_text[:INLINE_SAMPLE_CHARS]),
             }],
             temperature=0.0,
-            max_tokens=1024,  # 推理模型的 reasoning tokens 会占额度,留足
+            max_tokens=256,
         ).strip().lower()
-        for t in DOC_TYPES:
-            if t in raw:
-                return t
-        logger.warning(f"classify unparsable reply: {raw[:100]}")
+        for key in ("informational", "narrative", "persuasive", "instructional", "general"):
+            if key in raw:
+                return key
+        logger.warning(f"inline classify unparsable reply: {raw[:100]}")
     except Exception as e:
-        logger.warning(f"classify raised: {e}")
+        logger.warning(f"inline classify raised: {e}")
     return "general"
 
 
-def tool_classify_document(document_text: str = "", llm=None, **kw) -> str:
-    """识别文档类型并落库,供 generate_summary 及未来其他工具复用。"""
-    if not document_text:
-        return json.dumps({"status": "error", "message": "empty document_text"}, ensure_ascii=False)
+def _generate_with_validation(category: str | None, subtype: str | None,
+                              build_prompt, llm,
+                              temperature: float = 0.3, max_tokens: int = 4096
+                              ) -> tuple[dict, str]:
+    """校验-重试-补默认链。返回 (summary, note);硬失败抛 ValueError。
 
-    doc_type = _classify(document_text, llm)
-    label = TYPE_LABELS[doc_type]
+    - 非 dict → 重试一次(追加"不是有效 JSON")→ 仍坏 → ValueError
+    - 缺 required(仅一级 required)→ 重试一次(追加"缺少字段:xxx")→ 仍缺 → 补默认 + note
+    - 基础可选字段/扩展字段缺失 → 不重试、不提示,随补默认一步填空(结构稳定)
+    """
+    def _call() -> dict | None:
+        content = llm.complete(
+            messages=[{"role": "user", "content": build_prompt()}],
+            temperature=temperature, max_tokens=max_tokens,
+        )
+        obj = repair_json(content, return_objects=True)
+        return obj if isinstance(obj, dict) and obj else None
+
+    summary = _call()
+    if summary is None:
+        original = build_prompt()
+        build_prompt = lambda: (f"{original}\n\n注意:你上次的输出不是有效的 JSON,"
+                                f"请只输出 JSON 对象。")  # noqa: E731
+        summary = _call()
+        if summary is None:
+            raise ValueError("summary output is not valid JSON")
+
+    missing = [f for f in required_fields(category) if f not in summary]
+    if missing:
+        original = build_prompt()
+        build_prompt = lambda: (f"{original}\n\n注意:你上次的输出缺少字段:"
+                                f"{', '.join(missing)},请输出包含全部字段的完整 JSON。")  # noqa: E731
+        retried = _call()
+        if retried is not None:
+            summary = retried
+        missing = [f for f in required_fields(category) if f not in summary]
+
+    note = ""
+    if missing:
+        for f in missing:
+            summary[f] = field_default(category, f)
+        note = f"提示:以下字段未能从文档中提取,已填默认值:{', '.join(missing)}"
+
+    # 基础可选字段 + 扩展字段缺失 → 静默补默认,保证摘要结构稳定
+    tmpl = SUMMARY_TEMPLATES.get(category)
+    if tmpl:
+        ext = extension_for(category, subtype)
+        declared = set(tmpl["fields"]) | set((ext or {}).get("fields", {}))
+        for f in declared:
+            if f not in summary:
+                summary[f] = field_default(category, f)
+    return summary, note
+
+
+def _summarize_block(index: int, total: int, chunk: str, llm) -> str:
+    """Map 阶段单块:repair 失败/LLM 异常重试一次,仍失败记占位文案,归并不中断。"""
+    prompt = build_block_summary_prompt(index, total, chunk)
+    for attempt in range(2):
+        if attempt:
+            prompt += (f"\n\n注意:上次输出不是有效 JSON,"
+                       f'请只输出 {{"index": {index}, "summary": "..."}}。')
+        try:
+            content = llm.complete(messages=[{"role": "user", "content": prompt}],
+                                   temperature=0.3, max_tokens=512)
+        except Exception as e:
+            logger.warning(f"block {index} llm raised: {e}")
+            continue
+        obj = repair_json(content, return_objects=True)
+        if isinstance(obj, dict) and obj.get("summary"):
+            return str(obj["summary"])
+    return _BLOCK_PLACEHOLDER
+
+
+def _map_reduce_summary(category: str, subtype: str | None, document_text: str,
+                        focus: str, llm) -> tuple[dict, str]:
+    """长文分块摘要:逐块提取要点 → 归并成结构化摘要。"""
+    chunks = chunk_text(document_text)
+    block_summaries = [_summarize_block(i, len(chunks), c, llm)
+                       for i, c in enumerate(chunks)]
+    merge_prompt = build_merge_prompt(category, subtype, block_summaries, focus)
+    # 归并走同一校验链;temperature 0.2(格式合规优先)
+    return _generate_with_validation(category, subtype, lambda: merge_prompt, llm,
+                                     temperature=0.2)
+
+
+def tool_generate_summary(document_text: str = "", doc_category: str = "",
+                          doc_subtype: str = "", focus: str = "", llm=None, **kw) -> str:
+    """按文档类型生成结构化摘要;doc_category 缺失时内联分类兜底;长文自动分块。"""
+    if not document_text.strip():
+        return _error("empty document_text")
+
+    inline: dict = {}
+    category = resolve_category(doc_category)
+    if category is None:
+        # 兜底:用户上传后直接要求摘要(未走 classify_document)→ 内联一级分类
+        category = _inline_classify(document_text, llm)
+        subtype = None
+        inline = {"doc_category": category,
+                  "doc_category_label": SUMMARY_TEMPLATES[category]["label"]}
+    else:
+        subtype = valid_subtype_or_none(category, doc_subtype)
+
+    try:
+        if len(document_text) > LONG_DOC_THRESHOLD:
+            summary, note = _map_reduce_summary(category, subtype, document_text, focus, llm)
+        else:
+            summary, note = _generate_with_validation(
+                category, subtype,
+                lambda: build_summary_prompt(category, subtype, document_text, focus),
+                llm)
+    except ValueError as e:
+        return _error(str(e))
+    except Exception as e:
+        return _error(f"LLM call failed: {e}")
+
+    subtype_label = SUBTYPE_HINTS.get(category, {}).get(subtype, {}).get("label") \
+        if subtype else None
+    output = {
+        "summary": summary,
+        "summary_source_hash": md5_of(document_text),
+        "summary_category": category,
+        **inline,
+    }
+    type_text = SUMMARY_TEMPLATES[category]["label"] \
+        + (f"·{subtype_label}" if subtype_label else "")
     return json.dumps({
         "status": "success",
-        "doc_type": doc_type,
-        "doc_type_label": label,
-        "_output_data": {"doc_type": doc_type, "doc_type_label": label},
-        "instant_reply": f"📄 已识别文档类型:{label}",
+        "summary": summary,
+        "note": note,
+        "_output_data": output,
+        "instant_reply": f"✅ 摘要已生成({type_text})",
     }, ensure_ascii=False)
 
 
-def tool_generate_summary(document_text: str = "", doc_type: str = "",
-                          focus: str = "", llm=None, **kw) -> str:
-    """按文档类型生成结构化摘要;doc_type 缺失时先内联分类兜底。"""
-    if not document_text:
-        return json.dumps({"status": "error", "message": "empty document_text"}, ensure_ascii=False)
-
-    # 兜底:用户上传后直接要求摘要(未走 classify_document)→ 内联分类
-    if doc_type not in DOC_TYPES:
-        doc_type = _classify(document_text, llm)
-
-    try:
-        content = llm.complete(
-            messages=[{
-                "role": "user",
-                "content": build_summary_prompt(doc_type, document_text, focus),
-            }],
-            temperature=0.3,
-            max_tokens=4096,
-        )
-    except Exception as e:
-        return json.dumps({"status": "error", "message": f"LLM call failed: {e}"},
-                          ensure_ascii=False)
-
-    summary = repair_json(content, return_objects=True)
+def tool_revise_summary(summary=None, revision_request: str = "", document_text: str = "",
+                        doc_category: str = "", llm=None, **kw) -> str:
+    """按用户要求修订现有摘要;不动 summary_source_hash(修订不改变摘要与文档的对应关系)。"""
     if not isinstance(summary, dict) or not summary:
-        return json.dumps({
-            "status": "error",
-            "message": "summary output is not valid JSON",
-            "raw": content[:500],
-        }, ensure_ascii=False)
+        return _error("missing summary (请先生成摘要)")
+    if not revision_request.strip():
+        return _error("missing revision_request")
 
-    label = TYPE_LABELS[doc_type]
+    category = resolve_category(doc_category)
+    include_text = bool(document_text) and len(document_text) <= LONG_DOC_THRESHOLD
+    prompt = build_revise_prompt(summary, revision_request,
+                                 document_text if include_text else None, category)
+    try:
+        new_summary, note = _generate_with_validation(category, None, lambda: prompt, llm)
+    except ValueError as e:
+        return _error(str(e))
+    except Exception as e:
+        return _error(f"LLM call failed: {e}")
+
     return json.dumps({
         "status": "success",
-        "doc_type": doc_type,
-        "summary": summary,
-        "_output_data": {"summary": summary, "doc_type": doc_type, "doc_type_label": label},
-        "instant_reply": f"✅ 摘要已生成({label})",
+        "summary": new_summary,
+        "note": note,
+        "_output_data": {"summary": new_summary},
+        "instant_reply": "✏️ 摘要已按要求修订",
     }, ensure_ascii=False)

@@ -97,7 +97,7 @@ prism_agent/
 │   └── textcraft.py      # example agent entry
 └── skills/               # One subdirectory per agent, holding one subdirectory per skill
     ├── __init__.py
-    └── textcraft/        # example: doc_summary skill + orchestrator
+    └── textcraft/        # example: doc_classify + doc_summary skills + orchestrator
 ```
 
 ---
@@ -307,15 +307,20 @@ That's a minimal working agent. The next section explains the Adapter layer in d
 The repo ships a complete, runnable example agent **textcraft** (document processing: type classification + type-specific structured summaries) that exercises every convention in this README:
 
 ```
-skills/textcraft/doc_summary/     # skill (two tools: classify_document / generate_summary)
+skills/textcraft/doc_classify/    # classification skill (sampled classify, cheap model)
+skills/textcraft/doc_summary/     # summary skill (structured summaries + revision; long docs chunked)
 skills/textcraft/orchestrator/    # SYSTEM.md (orchestration instructions)
-adapters/textcraft/               # agent.yaml + two adapters
+adapters/textcraft/               # agent.yaml (per-skill models) + three adapters
 agents/textcraft.py               # agent entry
 demo_cli.py                       # interactive CLI
 demo_server.py + demo_web/        # web demo (Flask + single-page frontend)
 ```
 
-Design notes: after the user uploads a document, `classify_document` only classifies a **sample** (first 3000 chars — cheap), persisting `doc_type` to the DataStore; `generate_summary` reads the shared `doc_type` and produces a type-specific structured summary (paper / novel / news / general), classifying inline as a fallback when needed. If the user uploads without giving an instruction, the agent only reports the detected type and asks what to do next — it does not summarize unprompted.
+Design notes:
+- **Two-level classification**: level 1 is by *purpose* — informational / narrative / persuasive / instructional / general; level 2 refines by genre — 20 subtypes (papers, news, contracts, legal documents, novels, speeches, recipes, ...). `classify_document` classifies a **sample** (first 2000 + last 1000 chars, cheap model) and persists `doc_category` / `doc_subtype` / confidence; confidence below 0.6 falls back to "general" instead of guessing.
+- **Layered summary templates**: `generate_summary` applies a JSON schema per level-1 category (required fields validated, one retry), and level-2 subtypes add fields on demand (contracts → parties/amount/term; news → source/date/location; recipes → servings/time...). Long documents (>20k chars) are chunked and summarized Map-Reduce style; missing fields are retried, then defaulted.
+- **Revision & hash reuse**: `revise_summary` edits the existing summary per the user's request instead of regenerating it (cost-saving); uploads are deduplicated by content md5 — re-uploading the same document keeps all state and skips re-classification/re-summary.
+- If the user uploads without giving an instruction, the agent only reports the detected type and asks what to do next — it does not summarize unprompted.
 
 **Run the CLI**:
 

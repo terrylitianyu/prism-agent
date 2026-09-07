@@ -5,7 +5,8 @@ skill_dirs:
 
 models:
   orchestrator: "deepseek-v4-flash"
-  doc_summary: "deepseek-v4-flash"   # doc_summary skill 专用(分类/摘要共用);不配则兜底 orchestrator
+  doc_classify: "deepseek-v4-flash"   # doc_classify skill 专用(采样分类,便宜档)
+  doc_summary: "deepseek-v4-flash"    # doc_summary skill 专用(摘要质量要求高,可换更强模型)
 
 loop:
   max_iterations: 10

@@ -17,10 +17,9 @@ import time
 from pathlib import Path
 
 from prism import agent
-from agents.textcraft import init as init_textcraft
+from agents.textcraft import handle_upload, init as init_textcraft
 
 DATA_DIR = Path(".data")
-DOC_FIELDS = ("document_text", "doc_type", "doc_type_label", "summary")
 
 store = None
 session = None
@@ -54,12 +53,10 @@ def cmd_upload(path_str: str):
         print(f"  文件不存在: {p}")
         return
     text = p.read_text(encoding="utf-8", errors="replace")
-    sid = session.session_id
-    store.set_field(sid, "document_text", text)
-    for f in DOC_FIELDS[1:]:  # 新文档 → 清掉旧的分类/摘要,防陈旧状态
-        store.delete_field(sid, f)
-    print(f"  已上传 {p.name}({len(text)} 字符),旧分类/摘要已清空")
-    run_turn("我上传了一份文档")
+    # 与 Web 端同一条上传路径:hash 复用 / 清旧状态 / auto_message 都由 handle_upload 决定
+    result = handle_upload(session.session_id, store, p.name, text) or {}
+    print(f"  已上传 {p.name}({len(text)} 字符)")
+    run_turn(result.get("auto_message") or "我上传了一份文档")
 
 
 def cmd_state():
@@ -68,8 +65,20 @@ def cmd_state():
     print("  --- DataStore ---")
     preview = f" | {doc[:60].strip()}..." if doc else ""
     print(f"  document_text: {len(doc)} 字符{preview}")
-    print(f"  doc_type: {store.get_field(sid, 'doc_type')} "
-          f"({store.get_field(sid, 'doc_type_label')})")
+    doc_hash = store.get_field(sid, "document_hash")
+    print(f"  document_hash: {doc_hash[:8]}…" if doc_hash else "  document_hash: -")
+    print(f"  document_filename: {store.get_field(sid, 'document_filename') or '-'}")
+    cat = store.get_field(sid, "doc_category")
+    if cat:
+        print(f"  doc_category: {cat} ({store.get_field(sid, 'doc_category_label')})")
+        print(f"  doc_subtype: {store.get_field(sid, 'doc_subtype')} "
+              f"({store.get_field(sid, 'doc_subtype_label')})")
+        print(f"  classification: 置信 {store.get_field(sid, 'classification_confidence')} "
+              f"| fallback {store.get_field(sid, 'classification_fallback')}")
+    else:
+        print("  doc_category/subtype: (未识别)")
+    src_hash = store.get_field(sid, "summary_source_hash")
+    print(f"  summary_source_hash: {src_hash[:8]}…" if src_hash else "  summary_source_hash: -")
     summary = store.get_field(sid, "summary")
     if summary:
         print(f"  summary:\n{json.dumps(summary, ensure_ascii=False, indent=2)}")

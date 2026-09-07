@@ -10,11 +10,21 @@
     存在该函数 = 该 agent 有状态 chip 区(交互端据此渲染右上角状态)。
 """
 
+import hashlib
 from pathlib import Path
 
 from prism import agent
 from prism.core import ADAPTERS_DIR
 from prism.data_store import SQLiteDataStore
+
+# 上传时写入的字段 / 新内容上传时清空的字段(全部分类 + 摘要状态)
+UPLOAD_FIELDS = ("document_text", "document_hash", "document_filename")
+RESET_FIELDS = (
+    "doc_category", "doc_category_label",
+    "doc_subtype", "doc_subtype_label",
+    "classification_confidence", "classification_fallback",
+    "summary", "summary_source_hash", "summary_category",
+)
 
 
 def init(data_dir: Path):
@@ -25,22 +35,62 @@ def init(data_dir: Path):
     return store
 
 
+def _md5(text: str) -> str:
+    return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+
 def handle_upload(session_id, store, filename, text):
-    """上传后行为:写入 document_text、清旧状态;自动发消息复现"上传无指令"场景。"""
+    """上传后行为:hash 复用——同内容重传保留全部旧状态,新内容清旧状态。"""
+    text = text or ""
+    if not text.strip():
+        return {"auto_message": "我上传的文档是空的"}
+    new_hash = _md5(text)
+    if new_hash == store.get_field(session_id, "document_hash"):
+        return {"auto_message": "我又上传了这份文档,内容和上次完全相同"}
     store.set_field(session_id, "document_text", text)
-    for field in ("doc_type", "doc_type_label", "summary"):  # 清旧状态
+    store.set_field(session_id, "document_hash", new_hash)
+    store.set_field(session_id, "document_filename", filename)
+    for field in RESET_FIELDS:  # 新文档 → 清掉旧分类/摘要,防陈旧状态
         store.delete_field(session_id, field)
     return {"auto_message": "我上传了一份文档"}
 
 
 def get_state(session_id, store):
-    """右上角状态 chip:文档字符数 / 类型识别 / 摘要状态。"""
+    """右上角状态 chip:文档(文件名+字符数)/ 类型(二级+置信)/ 摘要(hash 一致性)。"""
     doc = store.get_field(session_id, "document_text") or ""
-    doc_type = store.get_field(session_id, "doc_type")
+    filename = store.get_field(session_id, "document_filename") or ""
+    if not doc:
+        doc_value = "未上传"
+    elif filename:
+        doc_value = f"{filename}·{len(doc)} 字符"
+    else:
+        doc_value = f"{len(doc)} 字符"
+
+    category_label = store.get_field(session_id, "doc_category_label")
+    if category_label:
+        subtype_label = store.get_field(session_id, "doc_subtype_label")
+        confidence = store.get_field(session_id, "classification_confidence")
+        fallback = store.get_field(session_id, "classification_fallback")
+        label = category_label + (f"·{subtype_label}" if subtype_label else "")
+        if fallback:
+            type_value = f"{label}(低置信)"
+        elif isinstance(confidence, (int, float)):
+            type_value = f"{label}({int(round(confidence * 100))}%)"
+        else:
+            type_value = label
+    else:
+        type_value = "未识别"
+
     has_summary = bool(store.get_field(session_id, "summary"))
+    doc_hash = store.get_field(session_id, "document_hash")
+    src_hash = store.get_field(session_id, "summary_source_hash")
+    if has_summary and doc_hash and src_hash:
+        summary_value = "已摘要(一致)" if doc_hash == src_hash else "已摘要(已更新)"
+    else:
+        summary_value = "已摘要" if has_summary else "未摘要"
+
     return {"chips": [
-        {"label": "文档", "value": f"{len(doc)} 字符" if doc else "未上传", "on": bool(doc)},
-        {"label": "类型", "value": store.get_field(session_id, "doc_type_label") or "未识别",
-         "on": bool(doc_type)},
-        {"label": "摘要", "value": "已摘要" if has_summary else "未摘要", "on": has_summary},
+        {"label": "文档", "value": doc_value, "on": bool(doc)},
+        {"label": "类型", "value": type_value, "on": bool(category_label)},
+        {"label": "摘要", "value": summary_value, "on": has_summary},
     ]}

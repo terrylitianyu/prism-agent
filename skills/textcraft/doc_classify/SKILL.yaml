@@ -1,0 +1,11 @@
+name: doc_classify
+description: "文档分类:功能目的型一级分类(信息传递/故事叙述/观点说服/步骤指令)+ 二级文体细分(20 类),输出 JSON 与置信度"
+
+tools:
+  - name: classify_document
+    handler: handlers.tool_classify_document
+    description: "识别当前文档的类型(一级功能目的分类 + 二级文体细分,如 信息传递型·新闻报道)。用户上传或粘贴新文档后、且未给出明确指令时调用:只需采样,成本低。调用后告知用户识别结果并询问下一步意图。"
+    inputs:
+      document_text: str
+      filename: str
+    output: dict
