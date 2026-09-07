@@ -3,28 +3,20 @@ name: doc_classify
 description: 文档分类:功能目的型一级分类 + 二级文体细分,输出 JSON 与置信度
 ---
 
-# Doc Classify Skill
+# Doc Classify Skill(文档类型识别)
 
 ## Capabilities
 
 | Tool | Description |
 |------|-------------|
-| classify_document | 识别文档类型(采样分类,低成本,输出一级/二级/置信度) |
+| classify_document | 识别文档类型(一级功能目的 + 二级文体,输出置信度) |
 
-## Tool Instructions
+## 推荐调用流程
 
-### 类型识别
-用户上传或粘贴新文档、且未给出明确指令时,调用 `classify_document`(无参数)。
-调用后:用一句话告知用户识别出的类型(一级·二级),并询问用户接下来想做什么(生成摘要?还是其他)。
+1. 调用 classify_document。
+2. 仅当新文档到达且会话状态中尚无识别结果时调用;同一文档不要重复识别。
 
-### 类型体系
-一级按"功能目的"分 5 类(含兜底 general),二级按文体细分 20 类(见下表);
-识别不出或把握不足(置信 < 0.6)时兜底 general。
+## 输出说明
 
-| 一级 | 二级 |
-|------|------|
-| informational 信息传递型 | news_report 新闻报道 / academic_paper 学术论文 / meeting_minutes 会议纪要 / research_report 研究报告 / encyclopedia_entry 百科词条 / contract 合同协议 / legal_document 法律文书 |
-| narrative 故事叙述型 | novel 小说 / prose 散文 / biography 传记 / screenplay 剧本 |
-| persuasive 观点说服型 | editorial 时评社论 / review 书评影评 / speech 演讲稿 / marketing_copy 营销文案 / opinion_piece 观点随笔 |
-| instructional 步骤指令型 | tutorial 教程指南 / manual 用户手册 / recipe 菜谱 / regulation 规章制度 |
-| general 其他 | (无二级) |
+- 识别结果会以即时消息自动告知用户(成功:"已识别文档类型:一级·二级(置信 X%)";兜底:"未能可靠识别文档类型,先按'其他文档'处理"),你只需补一句询问用户接下来想做什么。
+- 类型字段自动落库,doc_summary 会直接复用,无需在对话中传递。

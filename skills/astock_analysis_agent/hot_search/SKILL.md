@@ -15,9 +15,9 @@ description: 市场热点分析：个股人气榜 + 财联社电报快讯 + 热�
 
 ## 推荐调用流程（市场热点分析）
 
-1. `get_hot_search_rank(top_n=15)` —— 拿到当前最热的个股。
-2. `get_market_news(count=20)` —— 拿到最新市场快讯,判断驱动热点的事件。
-3. `analyze_hot_topics()` —— 综合分析热点主题(无参数,自动使用已落库的榜单与快讯)。
+1. 调用 get_hot_search_rank —— 拿到当前最热的个股。
+2. 调用 get_market_news —— 拿到最新市场快讯,判断驱动热点的事件。
+3. 调用 analyze_hot_topics —— 综合分析热点主题。
 
 ## 参数与数据约定
 

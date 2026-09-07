@@ -551,7 +551,7 @@ description: Article summary generation and revision
 
 ## Tool Instructions
 ### Generation
-Call `generate_summary` (no parameters).
+When the user asks for a summary, call generate_summary; optional param `style` carries the user's style request (omit when absent).
 ...
 ```
 

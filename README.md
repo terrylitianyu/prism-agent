@@ -550,7 +550,7 @@ description: 文章摘要生成与修改
 
 ## Tool Instructions
 ### 生成
-Call `generate_summary` (no parameters).
+用户要求总结/摘要时,调用 generate_summary;可选参数 style 承载用户的风格要求(没有则省略)。
 ...
 ```
 

@@ -17,11 +17,11 @@ description: A股单股技术分析：历史行情（自动附MA5/MA20）+ 实�
 
 ## 推荐调用流程（单股深研）
 
-1. `get_stock_history(symbol=代码)` —— 一切分析的前提；可选 `start_date`/`end_date`（YYYY-MM-DD 或 YYYYMMDD），缺省最近一年。返回最新收盘、MA5/MA20、近5日收盘/成交量等紧凑摘要。
-2. `get_stock_realtime()` —— 补充最新盘中快照；`symbol` 可省略，自动用当前会话股票。
-3. `get_sector_trend()` —— 行业归属与行业指数涨跌，判断个股相对行业强弱；`symbol` 可省略。
-4. `plot_kline_chart()` —— 生成K线图 PNG（无参数，用已落库行情）。用户明确要求图表时执行。
-5. `generate_tech_report()` —— 生成技术分析报告（无参数，自动使用已落库的行情/行业/图表）。
+1. 调用 get_stock_history（需提供股票代码）—— 一切分析的前提；可选参数 start_date/end_date（YYYY-MM-DD 或 YYYYMMDD），缺省最近一年。返回最新收盘、MA5/MA20、近5日收盘/成交量等紧凑摘要。
+2. 调用 get_stock_realtime —— 补充最新盘中快照；股票代码可省略。
+3. 调用 get_sector_trend —— 行业归属与行业指数涨跌，判断个股相对行业强弱；股票代码可省略。
+4. 调用 plot_kline_chart —— 生成K线图 PNG。用户明确要求图表时执行。
+5. 调用 generate_tech_report —— 生成技术分析报告。
 
 ## 参数与数据约定
 

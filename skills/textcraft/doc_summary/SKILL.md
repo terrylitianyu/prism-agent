@@ -3,7 +3,7 @@ name: doc_summary
 description: 文档摘要:按功能目的型分类生成结构化摘要(长文自动分块),支持按用户要求修订
 ---
 
-# Doc Summary Skill
+# Doc Summary Skill(结构化摘要)
 
 ## Capabilities
 
@@ -12,26 +12,20 @@ description: 文档摘要:按功能目的型分类生成结构化摘要(长文�
 | generate_summary | 按文档类型生成结构化摘要(可选 focus 侧重;长文自动分块) |
 | revise_summary  | 按用户要求修订已生成的摘要 |
 
-## Tool Instructions
+## 推荐调用流程
 
-### 结构化摘要
-用户要求总结/摘要时,调用 `generate_summary`。
-- 可选参数 `focus`:用户想侧重的方面(如"研究方法""人物关系"),没有则省略
-- 类型识别由 doc_classify 负责;未分类时本工具会自动做一级兜底分类
-- 调用前必须先有文档;若用户还没上传,引导用户先上传
+1. **生成摘要** → `generate_summary()`。用户要求总结/摘要时调用;可选参数 `focus` 承载用户的侧重要求(如"重点看研究方法""突出人物关系"),没有则省略。
+2. **修订摘要** → `revise_summary(revision_request=...)`。用户要求修改/压缩/扩写已有摘要时调用;`revision_request` 必填,把用户的修改要求原样整理进去,不要写无关内容。
 
-### 修订摘要
-用户要求修改已有摘要时,调用 `revise_summary`(参数 `revision_request` 必填)。
-文档内容未变化时优先修订而不是重新生成。
+## 参数与数据约定
 
-## 类型与输出结构(一级模板)
+- 长文(超过 2 万字符)会自动分块处理。
+- 文档尚未分类时会自动做一级兜底分类,不影响使用。
+- **省钱与复用(关键规则)**:摘要与"生成时的文档指纹"一起落库。文档未变时**不要重新生成摘要**——用户要调整就用修订;仅当用户明确要求"重新生成",或文档已更新(摘要指纹与当前文档不一致)时才重新生成。
+- 修订不改变摘要与文档的对应关系,可放心多次修订。
+- 调用前必须先有文档;用户还没上传时引导用户先上传。
 
-| doc_category | 中文 | 结构化摘要字段(必填加 *) |
-|--------------|------|--------------------------|
-| informational | 信息传递型 | title* / topic / key_information* / data_and_figures / conclusion / tldr* |
-| narrative | 故事叙述型 | title* / genre / main_characters / plot_summary* / themes / tldr* |
-| persuasive | 观点说服型 | title* / core_claim* / key_arguments / evidence / conclusion / tldr* |
-| instructional | 步骤指令型 | title* / goal / requirements / steps* / notes / tldr* |
-| general | 其他 | title* / key_points* / tldr* |
+## 输出说明
 
-二级文体(如合同、新闻、菜谱等)在一级模板之上有附加字段(如 parties/amount、source/date、servings/time),由系统自动按文体注入。
+- 摘要以结构化 JSON 落库(字段结构由文档类型决定,以工具返回结果为准),多轮对话可直接复用。
+- 工具返回的紧凑结果用于编排;给用户展示时用易读的方式呈现结构化要点,不要直接贴原始 JSON。
