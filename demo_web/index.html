@@ -89,6 +89,22 @@
          white-space: pre-wrap; word-break: break-word; font-size: 14px; }
   .msg.user { align-self: flex-end; background: #3964fe; color: #fff; }
   .msg.agent { align-self: flex-start; background: #fff; border: 1px solid #e4e7ec; }
+  /* 渲染后的 markdown 排版(仅 .msg.agent 内生效) */
+  .msg.agent p { margin: 4px 0; }
+  .msg.agent h1, .msg.agent h2, .msg.agent h3, .msg.agent h4 { margin: 10px 0 4px; line-height: 1.4; }
+  .msg.agent h1 { font-size: 17px; }
+  .msg.agent h2 { font-size: 16px; }
+  .msg.agent h3, .msg.agent h4 { font-size: 15px; }
+  .msg.agent ul, .msg.agent ol { margin: 4px 0; padding-left: 22px; }
+  .msg.agent li { margin: 2px 0; }
+  .msg.agent code { background: #f2f4f7; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+  .msg.agent pre { background: #f9fafb; border: 1px solid #e4e7ec; border-radius: 6px;
+                   padding: 8px; overflow-x: auto; margin: 6px 0; }
+  .msg.agent pre code { background: none; padding: 0; }
+  .msg.agent blockquote { border-left: 3px solid #d0d5dd; padding-left: 10px;
+                          color: #667085; margin: 6px 0; }
+  .msg.agent hr { border: none; border-top: 1px solid #e4e7ec; margin: 10px 0; }
+  .msg.agent a { color: #3964fe; }
   .evt { align-self: center; font-size: 12px; color: #667085; background: #fff;
          border: 1px dashed #d0d5dd; padding: 4px 12px; border-radius: 999px; }
   .evt.instant { color: #067647; border-color: #a6f4c5; background: #ecfdf3; }
@@ -177,10 +193,83 @@ let currentAgent = null;   // 当前服务端 agent(首页胶囊与对话标注�
 
 /* ---------- 通用消息/事件绘制 ---------- */
 
+/* ---------- 极简 Markdown 渲染(零依赖,覆盖 agent 输出的常用子集) ----------
+   策略:先检测是否含 md 标记,不含则返回 null(调用方走纯文本兜底);
+   含则逐行编译:标题/分隔线/无序列表/有序列表/引用/代码块/段落,
+   行内支持 **粗体** *斜体* `代码` [链接](url)。所有原文先 HTML 转义,
+   再套行内标记,防止文档内容注入 HTML。 */
+function looksLikeMarkdown(text) {
+  return /(^|\n)\s*(#{1,6}\s|[-*]\s|\d+[.)]\s|>\s?)/.test(text)
+      || /(^|\n)\s*---+\s*(\n|$)/.test(text)
+      || /\*\*|`|\[[^\]]+\]\([^)]+\)/.test(text);
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderInline(s) {
+  return s
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, label, url) =>
+      /^(https?:\/\/|\/|#)/.test(url)
+        ? `<a href="${url}" target="_blank" rel="noopener">${label}</a>` : m);
+}
+
+function renderMarkdown(text) {
+  if (!looksLikeMarkdown(text)) return null;  // 非 md:交给纯文本兜底
+  const out = [];
+  let list = null;      // 当前列表类型 "ul" | "ol"
+  let codeBuf = null;   // 代码块累积(null=不在代码块内)
+  let para = [];        // 普通段落行累积
+  const flushPara = () => {
+    if (para.length) { out.push(`<p>${renderInline(escapeHtml(para.join("\n")))}</p>`); para = []; }
+  };
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  for (const line of text.split("\n")) {
+    if (line.trim().startsWith("```")) {
+      flushPara(); closeList();
+      if (codeBuf === null) codeBuf = [];
+      else { out.push(`<pre><code>${escapeHtml(codeBuf.join("\n"))}</code></pre>`); codeBuf = null; }
+      continue;
+    }
+    if (codeBuf !== null) { codeBuf.push(line); continue; }
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { flushPara(); closeList();
+      out.push(`<h${h[1].length}>${renderInline(escapeHtml(h[2]))}</h${h[1].length}>`); continue; }
+    if (/^\s*---+\s*$/.test(line)) { flushPara(); closeList(); out.push("<hr>"); continue; }
+    const ul = line.match(/^\s*[-*]\s+(.*)$/);
+    if (ul) { flushPara();
+      if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; }
+      out.push(`<li>${renderInline(escapeHtml(ul[1]))}</li>`); continue; }
+    const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (ol) { flushPara();
+      if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; }
+      out.push(`<li>${renderInline(escapeHtml(ol[1]))}</li>`); continue; }
+    const bq = line.match(/^\s*>\s?(.*)$/);
+    if (bq) { flushPara(); closeList();
+      out.push(`<blockquote>${renderInline(escapeHtml(bq[1]))}</blockquote>`); continue; }
+    if (!line.trim()) { flushPara(); closeList(); continue; }
+    para.push(line);
+  }
+  flushPara(); closeList();
+  if (codeBuf !== null) out.push(`<pre><code>${escapeHtml(codeBuf.join("\n"))}</code></pre>`);
+  return out.join("");
+}
+/* ---------- /Markdown ---------- */
+
 function addMsg(role, text) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
-  div.textContent = text;
+  if (role === "agent") {
+    const md = renderMarkdown(text);
+    if (md !== null) div.innerHTML = md;  // 含 md 标记 → 编译;否则纯文本兜底
+    else div.textContent = text;
+  } else {
+    div.textContent = text;
+  }
   messages.appendChild(div);
   messages.scrollTop = messages.scrollHeight;
   return div;

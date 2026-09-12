@@ -8,6 +8,7 @@ LLM 能力由框架注入的 llm 句柄(llm.complete)提供。
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from json_repair import repair_json
 
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 INLINE_SAMPLE_CHARS = 2000  # 内联兜底分类的采样长度
 _BLOCK_PLACEHOLDER = "(本块内容无法提取)"
+_MAP_WORKERS = 4  # 分块 Map 的并发度:块间无依赖,并发换取总时延(推理模型单块约 6~8s)
 
 
 def _error(message: str, **extra) -> str:
@@ -131,10 +133,16 @@ def _summarize_block(index: int, total: int, chunk: str, llm) -> str:
 
 def _map_reduce_summary(category: str, subtype: str | None, document_text: str,
                         focus: str, llm) -> tuple[dict, str]:
-    """长文分块摘要:逐块提取要点 → 归并成结构化摘要。"""
+    """长文分块摘要:并行逐块提取要点(Map)→ 归并成结构化摘要(Reduce)。"""
     chunks = chunk_text(document_text)
-    block_summaries = [_summarize_block(i, len(chunks), c, llm)
-                       for i, c in enumerate(chunks)]
+    # Map 并行:块之间无依赖,每块一次 LLM 调用是纯网络等待,并发把总时延
+    # 从 N×单块时延压到约 N/worker×单块时延。线程安全:llm 句柄共享只读
+    # (框架 client 是进程级单例,OpenAI SDK 并发安全),_summarize_block 内部
+    # 自捕获异常(失败返回占位文案,不外抛)。executor.map 保序,归并顺序不受影响。
+    with ThreadPoolExecutor(max_workers=_MAP_WORKERS) as pool:
+        block_summaries = list(pool.map(
+            lambda item: _summarize_block(item[0], len(chunks), item[1], llm),
+            enumerate(chunks)))
     merge_prompt = build_merge_prompt(category, subtype, block_summaries, focus)
     # 归并走同一校验链;temperature 0.2(格式合规优先)
     return _generate_with_validation(category, subtype, lambda: merge_prompt, llm,
