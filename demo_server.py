@@ -164,6 +164,11 @@ def index():
     return send_from_directory(WEB_DIR, "index.html")
 
 
+@app.get("/favicon.png")
+def favicon():
+    return send_from_directory(WEB_DIR, "favicon.png")
+
+
 @app.get("/s/<sid>")
 def session_page(sid):
     """会话页:同一个 SPA,由前端解析路径渲染对应会话。"""
@@ -244,7 +249,9 @@ def api_upload():
     sid = _sid_from_request(name)
     if _resolve_session(name, sid) is None:
         return jsonify({"error": f"unknown session: {sid}"}), 400
-    text = f.read().decode("utf-8", errors="replace")
+    raw = f.read()
+    reader = getattr(mod, "read_document", None)
+    text = reader(f.filename, raw) if reader else raw.decode("utf-8", errors="replace")
     result = handler(sid, engine.store, f.filename, text) or {}
     return jsonify({"ok": True, "filename": f.filename, "chars": len(text), **result})
 

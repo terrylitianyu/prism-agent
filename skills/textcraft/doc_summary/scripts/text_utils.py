@@ -6,9 +6,35 @@ import hashlib
 import re
 
 CHUNK_SIZE = 4000
-LONG_DOC_THRESHOLD = 20000  # 字符数严格 > 该阈值才走分块 Map-Reduce
+LONG_DOC_TOKEN_THRESHOLD = 45_000  # 估算 token 严格 > 该值才走分块 Map-Reduce
+
+# 语言感知的 token 估算:CJK 1.5 token/字(与框架 estimate_tokens 对齐),
+# ASCII 0.3 token/字(英文约 4 字符/token),其余字符(假名/emoji/符号)按 1.0 保守估
+_CJK_RE = re.compile(r"[一-鿿㐀-䶿豈-﫿]")
+_ASCII_RE = re.compile(r"[\x20-\x7e\t\n]")
 
 _SENTENCE_SPLIT = re.compile(r"([^。！？!?;；…\n]+[。！？!?;；…]?)")
+
+
+def estimate_doc_tokens(text: str) -> int:
+    """估算文档 token 数(语言感知)。
+
+    字符数阈值对中英文不公平:同一字符量,中文 token 数是英文的约 5 倍——
+    中文可能撑爆单次调用上下文,英文却远未饱和。改用 token 口径后,
+    阈值语义是"单次摘要调用的输入预算",而非文档长度。
+    """
+    text = text or ""
+    if not text:
+        return 0
+    cjk = len(_CJK_RE.findall(text))
+    ascii_ = len(_ASCII_RE.findall(text))
+    other = len(text) - cjk - ascii_
+    return int(cjk * 1.5 + ascii_ * 0.3 + other * 1.0)
+
+
+def is_long_doc(text: str) -> bool:
+    """文档是否走分块 Map-Reduce:估算 token 超过单次调用输入预算。"""
+    return estimate_doc_tokens(text) > LONG_DOC_TOKEN_THRESHOLD
 
 
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE) -> list[str]:

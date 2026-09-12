@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Prism Agent</title>
+<link rel="icon" type="image/png" href="favicon.png">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -520,7 +521,8 @@ async function openChat(sid) {
   $("agent-badge-name").textContent = s.agent;
   $("agent-badge").classList.remove("hide");
   activeMessages = (s.history || []).length;
-  for (const h of s.history || []) addMsg(h.role, h.content);
+  // 后端存的角色名是 LLM API 原生的 "assistant",前端展示 class 是 "agent"——在显示边界归一
+  for (const h of s.history || []) addMsg(h.role === "assistant" ? "agent" : h.role, h.content);
   updateLockBadge();
   await loadAgents();    // 首页胶囊同步当前 agent(返回首页时一致)
   await loadSessions();

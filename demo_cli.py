@@ -16,7 +16,7 @@ import json
 import time
 from pathlib import Path
 
-from agents.textcraft import handle_upload, init as init_textcraft
+from agents.textcraft import handle_upload, init as init_textcraft, read_document
 
 DATA_DIR = Path(".data")
 
@@ -52,7 +52,7 @@ def cmd_upload(path_str: str):
     if not p.exists():
         print(f"  文件不存在: {p}")
         return
-    text = p.read_text(encoding="utf-8", errors="replace")
+    text = read_document(p.name, p.read_bytes())
     # 与 Web 端同一条上传路径:hash 复用 / 清旧状态 / auto_message 都由 handle_upload 决定
     result = handle_upload(session.session_id, store, p.name, text) or {}
     print(f"  已上传 {p.name}({len(text)} 字符)")

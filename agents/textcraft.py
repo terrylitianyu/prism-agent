@@ -5,7 +5,10 @@
 init(data_dir) 返回装配好的 prism.agent.AgentEngine(同时注册为默认 engine,
 兼容 agent.init_agent 老调用方);调用方从返回值取 .store / .default_session。
 
-除 init(data_dir) 外,本模块可选声明两个 UI 交互钩子(约定即协议,面向任意交互端):
+除 init(data_dir) 外,本模块可选声明三个 UI 交互钩子(约定即协议,面向任意交互端):
+  - read_document(filename, raw) -> str
+    存在该函数 = 该 agent 自定义"原始上传 → 文本"的抽取(如 PDF 抽文字层);
+    交互端在 handle_upload 之前调用它,缺省回退为 UTF-8 文本读。
   - handle_upload(session_id, store, filename, text) -> dict
     存在该函数 = 该 agent 支持上传(前端据此显示上传入口,/api/upload 据此放行)。
     返回 dict 可含 "auto_message"(前端收到后自动作为用户消息发送)。
@@ -14,6 +17,7 @@ init(data_dir) 返回装配好的 prism.agent.AgentEngine(同时注册为默认 
 """
 
 import hashlib
+import io
 from pathlib import Path
 
 from prism import agent
@@ -40,6 +44,27 @@ def init(data_dir: Path):
 
 def _md5(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+
+def read_document(filename: str, raw: bytes) -> str:
+    """上传文件的原始内容 → 纯文本。文件格式知识收在 agent 入口层,框架内核不感知。
+
+    PDF(有文字层)用 pypdf 逐页抽取,页间空行分隔;其余按 UTF-8 文本读
+    (errors=replace,与老行为一致)。扫描版(无文字层)PDF 抽出来是空串,
+    handle_upload 会按"空文档"提示用户——OCR 不在支持范围。
+    pypdf 惰性导入:不传 PDF 时不依赖它;传入且未安装时才报 ImportError。
+    """
+    name = (filename or "").lower()
+    if name.endswith(".pdf"):
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(raw))
+        pages = []
+        for page in reader.pages:
+            text = (page.extract_text() or "").strip()
+            if text:
+                pages.append(text)
+        return "\n\n".join(pages)
+    return raw.decode("utf-8", errors="replace")
 
 
 def handle_upload(session_id, store, filename, text):

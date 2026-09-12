@@ -17,7 +17,7 @@ from .prompts import (FALLBACK_CLASSIFY_PROMPT, build_block_summary_prompt,
 from .summary_taxonomy import (SUMMARY_TEMPLATES, SUBTYPE_HINTS, extension_for,
                                field_default, required_fields, resolve_category,
                                valid_subtype_or_none)
-from .text_utils import LONG_DOC_THRESHOLD, chunk_text, md5_of
+from .text_utils import chunk_text, is_long_doc, md5_of
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def _inline_classify(document_text: str, llm) -> str:
                     text=document_text[:INLINE_SAMPLE_CHARS]),
             }],
             temperature=0.0,
-            max_tokens=256,
+            max_tokens=1024,
         ).strip().lower()
         for key in ("informational", "narrative", "persuasive", "instructional", "general"):
             if key in raw:
@@ -115,8 +115,11 @@ def _summarize_block(index: int, total: int, chunk: str, llm) -> str:
             prompt += (f"\n\n注意:上次输出不是有效 JSON,"
                        f'请只输出 {{"index": {index}, "summary": "..."}}。')
         try:
+            # max_tokens 要给足:推理模型(如 deepseek-v4-flash)会先把预算烧在
+            # reasoning_content 上,512 会被思维链吃光导致 content 为空(实测
+            # finish_reason=length, reasoning_tokens=512)。4096 足够思考+输出。
             content = llm.complete(messages=[{"role": "user", "content": prompt}],
-                                   temperature=0.3, max_tokens=512)
+                                   temperature=0.3, max_tokens=4096)
         except Exception as e:
             logger.warning(f"block {index} llm raised: {e}")
             continue
@@ -168,7 +171,7 @@ def tool_generate_summary(document_text: str = "", doc_category: str = "",
                         f"({SUMMARY_TEMPLATES[category]['label']})生成")
 
     try:
-        if len(document_text) > LONG_DOC_THRESHOLD:
+        if is_long_doc(document_text):
             summary, note = _map_reduce_summary(category, subtype, document_text, focus, llm)
         else:
             summary, note = _generate_with_validation(
@@ -215,7 +218,7 @@ def tool_revise_summary(summary=None, revision_request: str = "", document_text:
         logger.warning(f"doc_category '{doc_category}' unknown, revise keeps "
                        f"original field structure")
         degraded = "提示:文档分类未被摘要模板识别,已保持原摘要字段结构"
-    include_text = bool(document_text) and len(document_text) <= LONG_DOC_THRESHOLD
+    include_text = bool(document_text) and not is_long_doc(document_text)
     prompt = build_revise_prompt(summary, revision_request,
                                  document_text if include_text else None, category)
     try:
