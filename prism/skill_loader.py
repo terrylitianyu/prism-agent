@@ -13,7 +13,7 @@ Flow:
   1. Scan skills/ for SKILL.yaml
   2. For each skill, look up its adapter from SKILL_ADAPTERS registry
   3. Build wrapper: adapter.resolve_inputs(ctx) → handler(**inputs) → adapter.write_output(ctx, result)
-  4. Register wrapper into TOOL_HANDLERS
+  4. AgentEngine 把 wrapper 注册进自己实例的 tool_handlers
   5. Auto-generate OpenAI tool schemas from SKILL.yaml descriptions + adapter.get_tool_params()
 """
 
@@ -27,7 +27,7 @@ from typing import Any, Callable, Dict, List, Optional
 import yaml
 
 from .skill_context import SkillAdapter, SkillContext
-from .client import SkillLLM
+from .client import SkillLLM, DEFAULT_MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +177,7 @@ def build_tool_wrapper(
     handler: Callable,
     llm_params: set = None,
     skill_name: str = "",
+    models: dict = None,
 ) -> Callable:
     """
     Build a wrapper that:
@@ -189,6 +190,8 @@ def build_tool_wrapper(
         get_context: Callable that returns a SkillContext instance at call time.
         llm_params: Set of param names that LLM provides. These override adapter inputs.
         skill_name: Skill name from SKILL.yaml; bound to the injected SkillLLM handle.
+        models: 所属 AgentEngine 的实例模型表(注入的 SkillLLM 据此路由模型;
+                None 时 SkillLLM 兜底 DEFAULT_MODELS)。
     """
     llm_params = llm_params or set()
 
@@ -253,7 +256,8 @@ def build_tool_wrapper(
         #     override step, so an LLM-passed param named "llm" cannot replace it;
         #     skipped entirely for handlers that can't accept it)
         if accepts_llm:
-            kwargs["llm"] = SkillLLM(skill_name, log_subdir=ctx.session_id)
+            kwargs["llm"] = SkillLLM(skill_name, log_subdir=ctx.session_id,
+                                     models=models)
 
         # 5. Call the handler
         try:
@@ -369,8 +373,19 @@ class SkillLoaderV2:
     """
 
     def __init__(self, agent_dir: Path, get_context: Callable,
-                 default_adapter: 'SkillAdapter' = None):
-        """初始化 SkillLoaderV2，从 agent_dir 读取配置、发现 adapter、扫描 skill 目录。"""
+                 default_adapter: 'SkillAdapter' = None,
+                 models: dict = None):
+        """初始化 SkillLoaderV2，从 agent_dir 读取配置、发现 adapter、扫描 skill 目录。
+
+        agent.yaml 由本 loader 统一解析(models/loop/skill_dirs 单一来源),
+        AgentEngine 经 get_models() / get_loop() 取用,不再自行解析。
+
+        models: 模型表底座(可选)。缺省以 DEFAULT_MODELS 拷贝为底;
+                显式传入时以其为底,agent.yaml 的 models 段覆盖底座——
+                直构本 loader 也会自动应用 agent.yaml,无需调用方透传。
+                无论底座还是 yaml 段缺 orchestrator 键,统一从
+                DEFAULT_MODELS 补齐(兜底模型始终在位)。
+        """
         self.agent_dir = Path(agent_dir)
         self.get_context = get_context  # callable that returns SkillContext
         self.default_adapter = default_adapter
@@ -382,6 +397,21 @@ class SkillLoaderV2:
 
         # 1. Load agent config (agent.yaml)
         self._agent_config = self._load_agent_config()
+
+        # 1.5 实例模型表:底座拷贝 + agent.yaml models 段覆盖 + orchestrator 兜底。
+        # 每个 loader 一份,注入工具 wrapper 的 SkillLLM 与 AgentEngine
+        # 共用同一张表(见 get_models),互不污染、互不影响全局默认表。
+        base = dict(models) if models is not None else dict(DEFAULT_MODELS)
+        yaml_models = self._agent_config.get("models")
+        if isinstance(yaml_models, dict):
+            base.update(yaml_models)
+        if "orchestrator" not in base:
+            base["orchestrator"] = DEFAULT_MODELS["orchestrator"]
+        self.models = base
+
+        # loop 段原样存下(非 dict 视为缺省),由 AgentEngine 合并进自己的默认值
+        yaml_loop = self._agent_config.get("loop")
+        self._loop = yaml_loop if isinstance(yaml_loop, dict) else {}
 
         # 2. Resolve skill_dirs from config (relative to project root)
         from .core import WORKDIR
@@ -555,9 +585,21 @@ class SkillLoaderV2:
 
             wrapper = build_tool_wrapper(
                 tool_def, adapter, self.get_context, handler, llm_params,
-                skill_name=manifest.name,
+                skill_name=manifest.name, models=self.models,
             )
             self._tool_handlers[tool_def.name] = wrapper
+
+    def get_models(self) -> dict:
+        """本 loader 的实例模型表(DEFAULT_MODELS 拷贝 + agent.yaml models 合并)。
+
+        AgentEngine 取此表作为自己的模型表;注入工具 wrapper 的 SkillLLM
+        也持同一对象——engine 与 skill 共用一张表,改动一处全链可见。
+        """
+        return self.models
+
+    def get_loop(self) -> dict:
+        """agent.yaml 的 loop 段(未合并默认值,缺省为 {})。"""
+        return self._loop
 
     def get_tool_handlers(self) -> Dict[str, Callable]:
         """Get all auto-registered tool handlers."""

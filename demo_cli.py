@@ -16,18 +16,18 @@ import json
 import time
 from pathlib import Path
 
-from prism import agent
 from agents.textcraft import handle_upload, init as init_textcraft
 
 DATA_DIR = Path(".data")
 
 store = None
 session = None
+engine = None
 
 
 def run_turn(message: str):
     """跑一轮 agent loop 并渲染事件流。"""
-    for event in agent.agent_loop_stream(message, conversation_history=[]):
+    for event in engine.agent_loop_stream(message, conversation_history=[]):
         ev, data = event.get("event"), event.get("data")
         if ev == "instant_reply":
             print(f"  ⚡ {data}")
@@ -95,9 +95,10 @@ def cmd_new():
 
 
 def main():
-    global store, session
-    store = init_textcraft(DATA_DIR)
-    session = agent._default_session
+    global store, session, engine
+    engine = init_textcraft(DATA_DIR)
+    store = engine.store
+    session = engine.default_session
     session.session_id = "cli-default"
     print(__doc__)
     while True:

@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """textcraft agent 入口:初始化 DataStore 并装配框架。
 
+init(data_dir) 返回装配好的 prism.agent.AgentEngine(同时注册为默认 engine,
+兼容 agent.init_agent 老调用方);调用方从返回值取 .store / .default_session。
+
 除 init(data_dir) 外,本模块可选声明两个 UI 交互钩子(约定即协议,面向任意交互端):
   - handle_upload(session_id, store, filename, text) -> dict
     存在该函数 = 该 agent 支持上传(前端据此显示上传入口,/api/upload 据此放行)。
@@ -28,11 +31,11 @@ RESET_FIELDS = (
 
 
 def init(data_dir: Path):
+    """装配 textcraft:建 DataStore,构造 AgentEngine 并返回(engine.store 即上面建的库)。"""
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     store = SQLiteDataStore(str(data_dir / "textcraft.db"))
-    agent.init_agent(agent_dir=ADAPTERS_DIR / "textcraft", store=store)
-    return store
+    return agent.init_agent(agent_dir=ADAPTERS_DIR / "textcraft", store=store)
 
 
 def _md5(text: str) -> str:

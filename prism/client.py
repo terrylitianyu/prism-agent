@@ -4,8 +4,9 @@
 LLM client for the Agent framework.
 Single endpoint: all models via the same proxy.
 
-MODELS dict is initialized with defaults and can be overridden by agent.yaml
-via configure_models() at startup.
+模型表按 AgentEngine 实例隔离:DEFAULT_MODELS 是内置兜底,agent.yaml 的
+models 段在 engine 构建时合并成该实例自己的 models(见 agent.AgentEngine)——
+不再有进程级 MODELS 全局表,多 agent 同进程互不覆盖。
 """
 
 import json
@@ -59,13 +60,20 @@ class LLMClient:
 
     call_llm / call_llm_with_tools 每次实际 API 调用记一行台账
     (INFO:skill/model/tokens/预览,DEBUG:完整 prompt),重试耗尽记 ERROR。
-    实例是轻量包装(两个字符串 + 缓存的 logger 引用),不持有连接:
+    实例是轻量包装(两个字符串 + 模型表引用 + 缓存的 logger),不持有连接:
     OpenAI 连接仍是模块级懒建单例(_get_client),所有实例共享。
+    models 缺省为 DEFAULT_MODELS 的拷贝;AgentEngine 场景传入该 engine 的实例模型表。
     """
 
-    def __init__(self, log_subdir: str = "", label: str = ""):
+    def __init__(self, log_subdir: str = "", label: str = "", models: dict = None):
         self.log_subdir = log_subdir or ""
         self.label = label
+        if models is not None and "orchestrator" not in models:
+            # 显式传表但缺兜底键:补上默认 orchestrator(拷贝而非原地改调用方的表)
+            models = {**models, "orchestrator": DEFAULT_MODELS["orchestrator"]}
+        # 未传表时也拷贝一份,不持全局表的活引用:DEFAULT_MODELS 只读靠约定,
+        # 拷贝后即便有人原地改全局表,已构造的 client 也不受影响
+        self.models = models if models is not None else dict(DEFAULT_MODELS)
         self.logger = _logger_for(self.log_subdir)
 
     def _record(self, model: str, messages: list, temperature: float,
@@ -84,7 +92,7 @@ class LLMClient:
     def call_llm(self, messages: list, model: str = None, temperature: float = 0.7,
                  max_tokens: int = 4096, max_retries: int = 3) -> dict:
         """Call LLM via OpenAI-compatible API. Returns {content, usage}."""
-        model = model or MODELS["orchestrator"]
+        model = model or self.models["orchestrator"]
         client = _get_client()
 
         for attempt in range(max_retries):
@@ -119,7 +127,7 @@ class LLMClient:
     def call_llm_with_tools(self, messages: list, tools: list, model: str = None,
                             temperature: float = 0.7, max_tokens: int = 4096):
         """Call LLM with tool definitions. Returns the raw response object."""
-        model = model or MODELS["orchestrator"]
+        model = model or self.models["orchestrator"]
         try:
             resp = _get_client().chat.completions.create(
                 model=model, messages=messages, tools=tools,
@@ -146,24 +154,23 @@ class LLMClient:
 API_BASE = os.environ.get("API_BASE", "")
 API_KEY = os.environ.get("API_KEY", "")
 
-# Default model mapping — overridden by agent.yaml `models` section at init time.
+# 内置兜底模型表(只读语义,请勿原地修改):AgentEngine 构建时拷贝此表,
+# 再按 agent.yaml 的 models 段合并成实例模型表——无跨 agent 的 merge 残留。
 # 约定:orchestrator 是全局兜底模型;skill 以自己的名字作为别名(见 get_model),
 # 在 agent.yaml 的 models 段配置同名 key,即为该 skill 的专用模型。
-MODELS = {
+DEFAULT_MODELS = {
     "orchestrator": "deepseek-v4-flash",
 }
 
 
-def get_model(alias: str) -> str:
-    """按别名取模型;未配置时兜底 orchestrator。skill 约定用自己的名字作别名。"""
-    return MODELS.get(alias) or MODELS["orchestrator"]
+def get_model(alias: str, models: dict = None) -> str:
+    """按别名取模型;未配置时兜底 orchestrator。skill 约定用自己的名字作别名。
 
-
-def configure_models(models_config: dict):
-    """Override MODELS with agent-specific configuration (from agent.yaml)."""
-    global MODELS
-    if models_config:
-        MODELS.update(models_config)
+    models 缺省用 DEFAULT_MODELS(裸 LLMClient / 测试场景);
+    AgentEngine 场景传该实例的模型表。
+    """
+    m = models if models is not None else DEFAULT_MODELS
+    return m.get(alias) or m["orchestrator"]
 
 
 class LLMError(Exception):
@@ -174,12 +181,13 @@ class SkillLLM(LLMClient):
     """注入给 skill handler 的 LLM 句柄,按 alias 惰性路由模型。
 
     框架在每次工具调用前构造并注入(kwargs["llm"]),handler 不 import client。
-    模型在每次调用时经 get_model(alias) 解析,agent.yaml 的 models 覆盖自然生效。
+    模型在每次调用时经 get_model(alias, self.models) 解析;models 由所属
+    AgentEngine 经 wrapper 传入(每 engine 一份,多 agent 互不串扰)。
     台账 label 固定为 alias(即 skill 名),日志子目录由构造方传入。
     """
 
-    def __init__(self, alias: str, log_subdir: str = ""):
-        super().__init__(log_subdir=log_subdir, label=alias)
+    def __init__(self, alias: str, log_subdir: str = "", models: dict = None):
+        super().__init__(log_subdir=log_subdir, label=alias, models=models)
         self.alias = alias
 
     def complete(self, messages: list, temperature: float = 0.7,
@@ -187,7 +195,7 @@ class SkillLLM(LLMClient):
         """调用 alias 绑定的模型,返回 content 文本;失败抛 LLMError。"""
         resp = self.call_llm(
             messages,
-            model=get_model(self.alias),
+            model=get_model(self.alias, self.models),
             temperature=temperature,
             max_tokens=max_tokens,
         )

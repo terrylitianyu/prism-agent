@@ -14,9 +14,9 @@ from skills.astock_analysis_agent.tech_analysis.scripts import charts
 
 
 def init(data_dir: Path):
+    """装配 astock_analysis_agent:建 DataStore,构造 AgentEngine 并返回。"""
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     charts.OUT_DIR = data_dir / "astock_analysis_agent" / "charts"
     store = SQLiteDataStore(str(data_dir / "astock_analysis_agent.db"))
-    agent.init_agent(agent_dir=ADAPTERS_DIR / "astock_analysis_agent", store=store)
-    return store
+    return agent.init_agent(agent_dir=ADAPTERS_DIR / "astock_analysis_agent", store=store)

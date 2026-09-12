@@ -64,7 +64,7 @@
 | **Agent 内核** | [prism/](prism/) 包（8 个模块） | 通用循环：LLM 调用、工具编排、上下文压缩、Session 管理。不关心业务。 |
 | **Skill（技能）** | [skills/&lt;agent&gt;/&lt;skill&gt;/](skills/) | 纯业务函数（handler）+ 声明式接口（`SKILL.yaml`）+ 使用说明（`SKILL.md`）。不依赖 session、store、框架。 |
 | **Adapter（适配器）** | [adapters/&lt;agent&gt;/&lt;skill&gt;.py](adapters/) | 把 Skill 的入参从 DataStore 里取出来、把出参写回去；声明 LLM 可填哪些参数。 |
-| **Agent 实例** | [agents/&lt;agent&gt;.py](agents/) | 一个入口函数：初始化 DataStore 并调用 `agent.init_agent(agent_dir, store)`。 |
+| **Agent 实例** | [agents/&lt;agent&gt;.py](agents/) | 一个入口函数：初始化 DataStore 并装配一个 `AgentEngine`（`agent.init_agent(agent_dir, store)` 的返回值）。 |
 
 一句话总结：**Skill 是可搬的通用能力；Adapter 是让 Skill 长在你这个 Agent 上的胶水。**
 
@@ -75,8 +75,8 @@
 ```
 prism_agent/
 ├── prism/                # 框架内核包（8 个模块，约 1800 行）
-│   ├── agent.py              # Agent Loop 内核（LLM 循环、工具并行、上下文压缩）
-│   ├── client.py             # LLM 客户端（call_llm / SkillLLM / MODELS）
+│   ├── agent.py              # AgentEngine（模型表/工具集/DataStore 实例隔离）+ Agent Loop 内核
+│   ├── client.py             # LLM 客户端（call_llm / SkillLLM / DEFAULT_MODELS）
 │   ├── core.py               # 常量：WORKDIR / SESSION_DIR / SKILLS_DIR / ADAPTERS_DIR
 │   ├── data_store.py         # DataStore 抽象 + SQLiteDataStore 实现（宽表 + 动态加列）
 │   ├── session.py            # BaseSession（对话历史、chat_events、turn_count）
@@ -275,29 +275,30 @@ def init(data_dir: Path):
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     store = SQLiteDataStore(str(data_dir / "my_agent.db"))
-    agent.init_agent(
+    return agent.init_agent(
         agent_dir=ADAPTERS_DIR / "my_agent",
         store=store,
     )
-    return store
 ```
+
+`init_agent` 返回装配好的 **AgentEngine**：模型表、工具集、DataStore、loop 配置全部实例隔离。单 agent 进程直接用模块级 `agent.agent_loop_stream(...)` 即可（薄壳自动转发到该 engine）；多 agent 同进程则各自构造 `agent.AgentEngine(agent_dir, store)` 并持有引用（demo_server 就是这么做的），互不串扰。engine 是 agent 级运行时，会话是请求级状态：多会话场景每个请求把自己的会话经 `agent_loop_stream(..., session=sess)` 显式传入（demo_server 的 api_chat 即是如此），不依赖线程局部状态。
 
 ### 4. 跑起来
 
 ```python
 from pathlib import Path
 from agents.my_agent import init
-from prism import agent
 
-store = init(Path(".data"))
+engine = init(Path(".data"))
+store = engine.store
 
-# 从 session 拿到默认 session_id 并写入业务数据
-sess = agent._default_session
+# 从 engine 拿到默认 session 并写入业务数据
+sess = engine.default_session
 sess.session_id = "demo-session"
 store.set_field(sess.session_id, "source_text", "你好，世界")
 
 # 走一轮 agent loop
-for event in agent.agent_loop_stream("请把它翻译成英文", conversation_history=[]):
+for event in engine.agent_loop_stream("请把它翻译成英文", conversation_history=[]):
     print(event)
 ```
 
@@ -752,8 +753,7 @@ def init(data_dir: Path):
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     store = SQLiteDataStore(str(data_dir / "writer_agent.db"))
-    agent.init_agent(agent_dir=ADAPTERS_DIR / "writer_agent", store=store)
-    return store
+    return agent.init_agent(agent_dir=ADAPTERS_DIR / "writer_agent", store=store)
 ```
 
 ---
@@ -803,8 +803,8 @@ A: 不建议。约定一个 skill 一个 adapter。如果不同工具需要不�
 **Q: DataStore 需要提前建表吗？**
 A: 不需要。`SQLiteDataStore` 会在你第一次 `set_field(session_id, "any_field", value)` 时自动 `ALTER TABLE ADD COLUMN`（见 [prism/data_store.py:86](prism/data_store.py#L86)）。所有字段值都以 JSON 字符串存储。
 
-**Q: MODELS 里的模型别名怎么改？**
-A: 框架只内置一个兜底别名 `orchestrator`。约定：**skill 用自己的名字作别名**——在 `agent.yaml` 的 `models` 段配置同名 key，即为该 skill 的专用模型；框架把它绑定到注入 handler 的 `llm` 句柄上，handler 不需要自己选模型（未配置时自动兜底 orchestrator）。`init_agent` 启动时调 `client.configure_models(...)` 把 models 段合并进 MODELS 表。参考 [adapters/textcraft/agent.yaml](adapters/textcraft/agent.yaml)。
+**Q: 模型别名怎么配？**
+A: 框架只内置一个兜底别名 `orchestrator`（见 `client.DEFAULT_MODELS`，只读）。约定：**skill 用自己的名字作别名**——在 `agent.yaml` 的 `models` 段配置同名 key，即为该 skill 的专用模型；框架把它绑定到注入 handler 的 `llm` 句柄上，handler 不需要自己选模型（未配置时自动兜底 orchestrator）。每个 `AgentEngine` 启动时把 models 段合并进**自己实例的**模型表（从 DEFAULT_MODELS 拷贝起算），多 agent 同进程互不覆盖。参考 [adapters/textcraft/agent.yaml](adapters/textcraft/agent.yaml)。
 
 **Q: 上下文压缩怎么触发？**
 A: 每轮 loop 开始前会估算 tokens，超过 `core.TOKEN_THRESHOLD`（默认 80k）就会：(1) 裁剪超长 tool output；(2) 用轻量模型对中间消息做结构化摘要。你不需要手动干预。

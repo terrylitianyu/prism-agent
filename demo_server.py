@@ -26,23 +26,25 @@ agent 没有会话时列表为空(不预置默认会话),首轮消息才创建�
 会话锁定规则(前端执行):会话已有对话记录后,agent 选择框变为锁定标注、
 不能再切换;新建会话后恢复可选。服务端保持宽松,仅由前端约束交互。
 
-注意:框架当前是"一进程一 agent"的全局状态设计(见 ROADMAP P2-5)。
-本 demo 的 /api/select 采用"选择即重初始化"——切换 agent 会重建全局状态,
-仅作演示用途;多 agent 并行是未来的 AgentEngine 方案。
+多 agent:每个 agent 首次选中时装配一个 prism.agent.AgentEngine 并缓存进
+_engines(双检锁),之后切换只是 _current 指针替换,不再重建。进行中的
+流式请求持有自己 engine 的引用、并显式携带 session(见 api_chat),此刻
+切换 agent 不会污染在途请求;engine 内部再把 session 绑进 ContextVar,
+供工具 wrapper / 并行执行沿链解析(见 prism/agent.py agent_loop_stream)。
 """
 
 import importlib
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
-from prism import agent
+from prism.agent import AgentEngine
 from prism.core import WORKDIR
 from prism.session import BaseSession
-from prism.session_context import set_current_session
 
 DATA_DIR = Path(".data")
 SESSIONS_ROOT = DATA_DIR / "sessions"  # 会话持久化目录:<agent>/<sid>/state.json
@@ -50,8 +52,11 @@ WEB_DIR = WORKDIR / "demo_web"
 
 app = Flask(__name__)
 
-# 当前 agent 装配(全局单例——框架"一进程一 agent"设计)
-_current = {"agent": None, "mod": None, "store": None, "session_id": None}
+# agent 名 -> (agent 模块, 装配好的 AgentEngine);首次选中时装配,之后切换只是指针替换
+_engines = {}
+_engines_lock = threading.Lock()  # 并发首请求同一 agent 时只装配一次
+# 当前选中的 agent(只是名字指针;mod/engine/store 一律经 _engines[name] 快照取)
+_current = {"agent": None}
 # 会话注册表:{agent_name: {session_id: BaseSession}};_active 记录各 agent 最后使用的会话
 _sessions = {}
 _active = {}
@@ -107,11 +112,13 @@ def _session_title(sess):
     return "新会话"
 
 
-def _resolve_session(sid):
-    """校验会话 id 属于当前 agent,返回 BaseSession 或 None。"""
-    if _current["agent"] is None:
+def _resolve_session(name, sid):
+    """校验会话 id 属于指定 agent,返回 BaseSession 或 None。
+    name 用调用方已有的局部变量,不回读 _current——并发 select 在两次读之间
+    翻转时,会话解析仍落在本请求自己的 agent 上。"""
+    if not name or not sid:
         return None
-    return _ensure_sessions(_current["agent"]).get(sid)
+    return _ensure_sessions(name).get(sid)
 
 
 def _find_session(sid):
@@ -127,25 +134,29 @@ def _find_session(sid):
     return None, None
 
 
-def _sid_from_request():
-    """取请求指定的会话 id(query/form 参数,缺省用当前会话)。"""
+def _sid_from_request(name):
+    """取请求指定的会话 id(query/form 参数,缺省用该 agent 最后使用的会话)。"""
     return request.args.get("session_id") or request.form.get("session_id") \
-        or _current["session_id"]
+        or _active.get(name)
 
 
 def _select_agent(name):
-    """(重)初始化指定 agent——会替换框架全局状态。"""
-    mod = importlib.import_module(f"agents.{name}")
-    store = mod.init(DATA_DIR)
-    _current.update(agent=name, mod=mod, store=store)
-    sessions = _ensure_sessions(name)
-    if sessions:
-        _current["session_id"] = _active[name]
-        set_current_session(sessions[_active[name]])
-    else:
-        # 该 agent 尚无会话:不绑定(api_chat 首轮消息创建时再绑定)
-        _current["session_id"] = None
-    return store
+    """选中指定 agent:首次装配并缓存 engine(双检锁,并发首请求只建一次),
+    之后切换只是指针替换(不重建)。"""
+    if name not in _engines:
+        with _engines_lock:
+            if name not in _engines:
+                mod = importlib.import_module(f"agents.{name}")
+                engine = mod.init(DATA_DIR)
+                if not isinstance(engine, AgentEngine):
+                    raise TypeError(
+                        f"agents.{name}.init() 应返回 prism.agent.AgentEngine;"
+                        f"老契约(返回 DataStore)已随 AgentEngine 重构废弃,见 README"
+                    )
+                _engines[name] = (mod, engine)
+    _current["agent"] = name
+    _ensure_sessions(name)  # 预载该 agent 的会话注册表(含 _active 恢复)
+    return _engines[name][1]
 
 
 @app.get("/")
@@ -199,7 +210,6 @@ def api_sessions_new():
     sessions[sid] = BaseSession(session_id=sid)
     _save_session(name, sessions[sid])
     _active[name] = sid
-    _current["session_id"] = sid
     return jsonify({"ok": True, "id": sid})
 
 
@@ -221,36 +231,40 @@ def api_session_history(sid):
 @app.post("/api/upload")
 def api_upload():
     """上传代理:仅当当前 agent 声明了 handle_upload 时可用。"""
-    if _current["agent"] is None:
+    name = _current["agent"]
+    if name is None:
         return jsonify({"error": "请先选择 agent"}), 400
-    handler = getattr(_current["mod"], "handle_upload", None)
+    mod, engine = _engines[name]  # 一次快照:两次读之间 select 翻转也不会撕裂
+    handler = getattr(mod, "handle_upload", None)
     if handler is None:
         return jsonify({"error": "当前 agent 不支持上传"}), 400
     f = request.files.get("file")
     if not f:
         return jsonify({"error": "no file"}), 400
-    sid = _sid_from_request()
-    if _resolve_session(sid) is None:
+    sid = _sid_from_request(name)
+    if _resolve_session(name, sid) is None:
         return jsonify({"error": f"unknown session: {sid}"}), 400
     text = f.read().decode("utf-8", errors="replace")
-    result = handler(sid, _current["store"], f.filename, text) or {}
+    result = handler(sid, engine.store, f.filename, text) or {}
     return jsonify({"ok": True, "filename": f.filename, "chars": len(text), **result})
 
 
 @app.get("/api/state")
 def api_state():
     """状态代理:当前 agent 的 chip 列表与上传能力,由 agent 的 get_state 决定。"""
-    if _current["agent"] is None:
+    name = _current["agent"]
+    if name is None:
         return jsonify({"agent": None})
-    sid = _sid_from_request()
-    if _resolve_session(sid) is None:
+    mod, engine = _engines[name]  # 一次快照,同 api_upload
+    sid = _sid_from_request(name)
+    if _resolve_session(name, sid) is None:
         return jsonify({"error": f"unknown session: {sid}"}), 400
-    provider = getattr(_current["mod"], "get_state", None)
-    state = provider(sid, _current["store"]) or {} \
+    provider = getattr(mod, "get_state", None)
+    state = provider(sid, engine.store) or {} \
         if provider else {}
     return jsonify({
-        "agent": _current["agent"],
-        "upload": getattr(_current["mod"], "handle_upload", None) is not None,
+        "agent": name,
+        "upload": getattr(mod, "handle_upload", None) is not None,
         "chips": state.get("chips", []),
     })
 
@@ -282,22 +296,23 @@ def api_chat():
         _active[agent_name] = sid
         created = True
 
-    sess = _resolve_session(sid)
+    sess = _resolve_session(agent_name, sid)
     if sess is None:
         return jsonify({"error": f"unknown session: {sid}"}), 400
 
-    # 绑定本请求的会话:ContextVar 按线程隔离,多会话互不串扰
-    set_current_session(sess)
-    _current["session_id"] = sid
     _active[agent_name] = sid
-    sess_dir = _session_dir(agent_name, sid)
+    # 捕获本请求自己的 engine:流式输出期间用户切换到别的 agent 时,
+    # 在途请求仍用自己的 engine(模型表/工具集/store),不被污染
+    engine = _engines[agent_name][1]
 
     def stream():
         if created:
             # 流首事件:告知前端新会话 id(前端据此跳转 /s/<sid>)
             yield f"data: {json.dumps({'event': 'session', 'data': {'id': sid}}, ensure_ascii=False)}\n\n"
         try:
-            for event in agent.agent_loop_stream(message, conversation_history=[], session_dir=sess_dir):
+            # 会话显式随请求传入;落盘统一由 finally 负责(覆盖客户端断开),
+            # 故不再传 session_dir 让 engine 落盘
+            for event in engine.agent_loop_stream(message, conversation_history=[], session=sess):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         finally:
             # 无论正常结束还是客户端断开,都落盘会话状态

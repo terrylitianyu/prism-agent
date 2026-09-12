@@ -64,7 +64,7 @@ The framework consists of four roles with strictly separated responsibilities:
 | **Agent kernel** | the [prism/](prism/) package (8 modules) | Generic loop: LLM calls, tool orchestration, context compression, session management. Knows nothing about business. |
 | **Skill** | [skills/&lt;agent&gt;/&lt;skill&gt;/](skills/) | Pure business functions (handlers) + declarative interface (`SKILL.yaml`) + usage docs (`SKILL.md`). No dependency on session, store, or framework. |
 | **Adapter** | [adapters/&lt;agent&gt;/&lt;skill&gt;.py](adapters/) | Pulls the skill's inputs from the DataStore and writes its outputs back; declares which parameters the LLM may fill. |
-| **Agent instance** | [agents/&lt;agent&gt;.py](agents/) | A single entry function: initializes the DataStore and calls `agent.init_agent(agent_dir, store)`. |
+| **Agent instance** | [agents/&lt;agent&gt;.py](agents/) | A single entry function: initializes the DataStore and assembles an `AgentEngine` (the return value of `agent.init_agent(agent_dir, store)`). |
 
 In one sentence: **a Skill is a portable, reusable capability; an Adapter is the glue that lets a Skill grow onto your agent.**
 
@@ -75,8 +75,8 @@ In one sentence: **a Skill is a portable, reusable capability; an Adapter is the
 ```
 prism_agent/
 ├── prism/                # framework kernel package (8 modules, ~1,800 lines)
-│   ├── agent.py              # Agent loop kernel (LLM loop, parallel tools, context compression)
-│   ├── client.py             # LLM client (call_llm / SkillLLM / MODELS)
+│   ├── agent.py              # AgentEngine (per-instance models/tools/DataStore) + agent loop kernel
+│   ├── client.py             # LLM client (call_llm / SkillLLM / DEFAULT_MODELS)
 │   ├── core.py               # Constants: WORKDIR / SESSION_DIR / SKILLS_DIR / ADAPTERS_DIR
 │   ├── data_store.py         # DataStore abstraction + SQLiteDataStore (wide table + dynamic columns)
 │   ├── session.py            # BaseSession (conversation history, chat_events, turn_count)
@@ -276,29 +276,30 @@ def init(data_dir: Path):
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     store = SQLiteDataStore(str(data_dir / "my_agent.db"))
-    agent.init_agent(
+    return agent.init_agent(
         agent_dir=ADAPTERS_DIR / "my_agent",
         store=store,
     )
-    return store
 ```
+
+`init_agent` returns the assembled **AgentEngine**: model table, tool set, DataStore and loop config are all instance-scoped. A single-agent process can keep using the module-level `agent.agent_loop_stream(...)` (a thin shell that forwards to this engine); to host multiple agents in one process, construct `agent.AgentEngine(agent_dir, store)` per agent and hold the references (that's what demo_server does) — they never interfere. The engine is agent-level runtime; the session is request-level state: multi-session hosts pass each request's session explicitly via `agent_loop_stream(..., session=sess)` (see demo_server's api_chat) instead of relying on thread-local state.
 
 ### 4. Run it
 
 ```python
 from pathlib import Path
 from agents.my_agent import init
-from prism import agent
 
-store = init(Path(".data"))
+engine = init(Path(".data"))
+store = engine.store
 
-# Grab the default session_id and write business data into the store
-sess = agent._default_session
+# Grab the default session and write business data into the store
+sess = engine.default_session
 sess.session_id = "demo-session"
 store.set_field(sess.session_id, "source_text", "你好，世界")
 
 # Run one agent loop
-for event in agent.agent_loop_stream("Please translate it to English", conversation_history=[]):
+for event in engine.agent_loop_stream("Please translate it to English", conversation_history=[]):
     print(event)
 ```
 
@@ -753,8 +754,7 @@ def init(data_dir: Path):
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     store = SQLiteDataStore(str(data_dir / "writer_agent.db"))
-    agent.init_agent(agent_dir=ADAPTERS_DIR / "writer_agent", store=store)
-    return store
+    return agent.init_agent(agent_dir=ADAPTERS_DIR / "writer_agent", store=store)
 ```
 
 ---
@@ -804,8 +804,8 @@ A: Not recommended — the convention is one adapter per skill. If different too
 **Q: Do I need to create tables for the DataStore in advance?**
 A: No. `SQLiteDataStore` automatically runs `ALTER TABLE ADD COLUMN` the first time you call `set_field(session_id, "any_field", value)` (see [prism/data_store.py:86](prism/data_store.py#L86)). All field values are stored as JSON strings.
 
-**Q: How do I change the model aliases in MODELS?**
-A: The framework ships exactly one built-in alias: the `orchestrator` fallback. Convention: **a skill uses its own name as its alias** — a same-named key in the `models` section of `agent.yaml` becomes that skill's dedicated model, and the framework binds it to the `llm` handle injected into the handler, so handlers never pick models themselves (unconfigured aliases fall back to `orchestrator`). At startup, `init_agent` calls `client.configure_models(...)` to merge the section into MODELS. See [adapters/textcraft/agent.yaml](adapters/textcraft/agent.yaml).
+**Q: How do I configure the model aliases?**
+A: The framework ships exactly one built-in alias: the `orchestrator` fallback (see `client.DEFAULT_MODELS`, read-only). Convention: **a skill uses its own name as its alias** — a same-named key in the `models` section of `agent.yaml` becomes that skill's dedicated model, and the framework binds it to the `llm` handle injected into the handler, so handlers never pick models themselves (unconfigured aliases fall back to `orchestrator`). Each `AgentEngine` merges the section into **its own instance's** model table at startup (copied from DEFAULT_MODELS), so multiple agents in one process never overwrite each other. See [adapters/textcraft/agent.yaml](adapters/textcraft/agent.yaml).
 
 **Q: When does context compression trigger?**
 A: At the start of every loop iteration the framework estimates tokens; beyond `core.TOKEN_THRESHOLD` (default 80k) it (1) prunes oversized tool outputs, then (2) summarizes the middle messages with a lightweight model. No manual intervention needed.
