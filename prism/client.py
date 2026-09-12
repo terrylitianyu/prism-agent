@@ -8,6 +8,9 @@ MODELS dict is initialized with defaults and can be overridden by agent.yaml
 via configure_models() at startup.
 """
 
+import json
+import logging
+import logging.handlers
 import os
 import time
 
@@ -18,6 +21,122 @@ from .core import WORKDIR
 
 # 从项目根目录的 .env 加载配置(已存在的系统环境变量优先,不会被 .env 覆盖)
 load_dotenv(WORKDIR / ".env")
+
+# =============================================================================
+# LLM call ledger —— 所有 LLM 调用(orchestrator + skill 内)统一落盘
+# =============================================================================
+# 每条调用记一行台账(模型/tokens/输出预览),完整 prompt 走 DEBUG。
+# LLMClient 构造时绑定日志子目录(调用方通常传 session_id):
+# 空串落默认 logs/llm_call.log,非空落 logs/<子目录>/llm_call.log。
+_LLM_LOG_ROOT = WORKDIR / "logs"
+_LLM_LOG_ROOT.mkdir(parents=True, exist_ok=True)
+# 子目录名 -> logger:key 即 log_subdir(实际为 session_id,空串=默认目录)。
+# 每目录只在首次出现时建一个 handler 并缓存,避免同文件多 handler 重复写/抢轮转。
+_llm_loggers: dict = {}
+
+
+def _logger_for(log_subdir: str) -> logging.Logger:
+    """按日志子目录取 logger(懒建,缓存)。空串使用默认日志目录。"""
+    key = log_subdir or ""
+    if key not in _llm_loggers:
+        log_dir = _LLM_LOG_ROOT / log_subdir if log_subdir else _LLM_LOG_ROOT
+        log_dir.mkdir(parents=True, exist_ok=True)
+        lg = logging.getLogger("llm.call").getChild(log_subdir or "default")
+        handler = logging.handlers.TimedRotatingFileHandler(
+            log_dir / "llm_call.log", when="H", interval=1,
+            backupCount=72, encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        handler.suffix = "%Y%m%d_%H"
+        lg.addHandler(handler)
+        lg.setLevel(logging.INFO)
+        _llm_loggers[key] = lg
+    return _llm_loggers[key]
+
+
+class LLMClient:
+    """带台账的 LLM 调用器:构造时绑定日志子目录与用途标签,每条调用自动落盘。
+
+    call_llm / call_llm_with_tools 每次实际 API 调用记一行台账
+    (INFO:skill/model/tokens/预览,DEBUG:完整 prompt),重试耗尽记 ERROR。
+    实例是轻量包装(两个字符串 + 缓存的 logger 引用),不持有连接:
+    OpenAI 连接仍是模块级懒建单例(_get_client),所有实例共享。
+    """
+
+    def __init__(self, log_subdir: str = "", label: str = ""):
+        self.log_subdir = log_subdir or ""
+        self.label = label
+        self.logger = _logger_for(self.log_subdir)
+
+    def _record(self, model: str, messages: list, temperature: float,
+                max_tokens: int, content: str, usage, attempt: int):
+        n_chars = sum(len(str(m.get("content") or "")) for m in messages)
+        pt = usage.get("prompt_tokens", 0) if usage else 0
+        ct = usage.get("completion_tokens", 0) if usage else 0
+        preview = (content or "").replace("\n", " ")[:120]
+        self.logger.info(
+            f"[LLM] subdir={self.log_subdir or '-'} skill={self.label or '-'} "
+            f"model={model} temp={temperature} max_tokens={max_tokens} "
+            f"msgs={len(messages)} prompt_chars={n_chars} tokens={pt}+{ct} "
+            f"attempt={attempt} preview={preview!r}")
+        self.logger.debug("[LLM PROMPT]\n%s", json.dumps(messages, ensure_ascii=False))
+
+    def call_llm(self, messages: list, model: str = None, temperature: float = 0.7,
+                 max_tokens: int = 4096, max_retries: int = 3) -> dict:
+        """Call LLM via OpenAI-compatible API. Returns {content, usage}."""
+        model = model or MODELS["orchestrator"]
+        client = _get_client()
+
+        for attempt in range(max_retries):
+            try:
+                resp = client.chat.completions.create(
+                    model=model, messages=messages,
+                    temperature=temperature, max_tokens=max_tokens,
+                )
+                choice = resp.choices[0]
+                content = choice.message.content or ""
+                usage = {
+                    "prompt_tokens": resp.usage.prompt_tokens if resp.usage else 0,
+                    "completion_tokens": resp.usage.completion_tokens if resp.usage else 0,
+                }
+                # 每次实际 API 调用记一行(空内容的重试同样计费)
+                self._record(model, messages, temperature, max_tokens,
+                             content, usage, attempt + 1)
+                if not content.strip() and attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                return {"content": content, "usage": usage}
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                self.logger.error(
+                    f"[LLM ERROR] subdir={self.log_subdir or '-'} "
+                    f"skill={self.label or '-'} model={model} "
+                    f"attempt={attempt + 1} error={e!r}")
+                return {"content": f"[LLM Error: {e}]", "usage": {}}
+
+    def call_llm_with_tools(self, messages: list, tools: list, model: str = None,
+                            temperature: float = 0.7, max_tokens: int = 4096):
+        """Call LLM with tool definitions. Returns the raw response object."""
+        model = model or MODELS["orchestrator"]
+        try:
+            resp = _get_client().chat.completions.create(
+                model=model, messages=messages, tools=tools,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+        except Exception as e:
+            self.logger.error(
+                f"[LLM ERROR] subdir={self.log_subdir or '-'} "
+                f"skill={self.label or '-'} model={model} error={e!r}")
+            raise
+        usage = {
+            "prompt_tokens": resp.usage.prompt_tokens if resp.usage else 0,
+            "completion_tokens": resp.usage.completion_tokens if resp.usage else 0,
+        }
+        self._record(model, messages, temperature, max_tokens,
+                     resp.choices[0].message.content or "", usage, 1)
+        return resp
 
 
 # =============================================================================
@@ -51,20 +170,22 @@ class LLMError(Exception):
     """LLM 调用失败(SkillLLM.complete 抛出,替代 [LLM Error: 文本标记约定)。"""
 
 
-class SkillLLM:
+class SkillLLM(LLMClient):
     """注入给 skill handler 的 LLM 句柄,按 alias 惰性路由模型。
 
     框架在每次工具调用前构造并注入(kwargs["llm"]),handler 不 import client。
     模型在每次调用时经 get_model(alias) 解析,agent.yaml 的 models 覆盖自然生效。
+    台账 label 固定为 alias(即 skill 名),日志子目录由构造方传入。
     """
 
-    def __init__(self, alias: str):
+    def __init__(self, alias: str, log_subdir: str = ""):
+        super().__init__(log_subdir=log_subdir, label=alias)
         self.alias = alias
 
     def complete(self, messages: list, temperature: float = 0.7,
                  max_tokens: int = 4096) -> str:
         """调用 alias 绑定的模型,返回 content 文本;失败抛 LLMError。"""
-        resp = call_llm(
+        resp = self.call_llm(
             messages,
             model=get_model(self.alias),
             temperature=temperature,
@@ -77,8 +198,9 @@ class SkillLLM:
 
 
 # =============================================================================
-# Client (lazy-initialized)
+# OpenAI client (lazy-initialized)
 # =============================================================================
+# 进程级连接单例:LLMClient 实例是轻量包装,不持有连接;此处懒建一次全局复用。
 
 _client = None
 
@@ -98,50 +220,3 @@ def _get_client():
             timeout=600,
         )
     return _client
-
-
-# =============================================================================
-# LLM Functions
-# =============================================================================
-
-def call_llm(messages: list, model: str = None, temperature: float = 0.7,
-             max_tokens: int = 4096, max_retries: int = 3) -> dict:
-    """Call LLM via OpenAI-compatible API. Returns {content, usage}."""
-    model = model or MODELS["orchestrator"]
-    client = _get_client()
-
-    for attempt in range(max_retries):
-        try:
-            resp = client.chat.completions.create(
-                model=model, messages=messages,
-                temperature=temperature, max_tokens=max_tokens,
-            )
-            choice = resp.choices[0]
-            content = choice.message.content or ""
-            if not content.strip() and attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            return {
-                "content": content,
-                "usage": {
-                    "prompt_tokens": resp.usage.prompt_tokens if resp.usage else 0,
-                    "completion_tokens": resp.usage.completion_tokens if resp.usage else 0,
-                },
-            }
-        except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            return {"content": f"[LLM Error: {e}]", "usage": {}}
-
-
-def call_llm_with_tools(messages: list, tools: list, model: str = None,
-                        temperature: float = 0.7, max_tokens: int = 4096):
-    """Call LLM with tool definitions. Returns the raw response object."""
-    model = model or MODELS["orchestrator"]
-    client = _get_client()
-    resp = client.chat.completions.create(
-        model=model, messages=messages, tools=tools,
-        temperature=temperature, max_tokens=max_tokens,
-    )
-    return resp

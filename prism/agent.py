@@ -20,7 +20,7 @@ from .core import (
     WORKDIR, SESSION_DIR, SKILLS_DIR, ADAPTERS_DIR,
     TOKEN_THRESHOLD, MAX_TOOL_OUTPUT,
 )
-from .client import call_llm, call_llm_with_tools, MODELS
+from .client import LLMClient, MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -233,14 +233,17 @@ def _summarize_messages(messages: list) -> str:
     # 摘要模型可在 agent.yaml 的 loop.summary_model 配置，默认用兜底模型
     summary_model = _loop_config.get("summary_model") or MODELS["orchestrator"]
     try:
-        resp = call_llm(
+        current = get_current_session()
+        resp = LLMClient(
+            current.session_id if current else "", label="loop.summary",
+        ).call_llm(
             messages=prompt,
             model=summary_model,
             temperature=0.2,
             max_tokens=1024,
         )
     except Exception as e:
-        # call_llm 自身的 try 覆盖不到的路径（如客户端构造失败）
+        # call_llm 内部 try 覆盖不到的路径（如客户端构造失败）
         raise _SummarizeFailed(f"call_llm raised: {e}")
 
     content = (resp.get("content") or "").strip()
@@ -423,6 +426,8 @@ def agent_loop_stream(user_message: str, conversation_history: list, session_dir
 
     # Token usage tracking
     usage_log = []
+    # LLM 调用台账:每条调用自动落盘 logs/<session_id>/llm_call.log(见 client.LLMClient)
+    llm_client = LLMClient(session.session_id, label="orchestrator")
 
     max_iterations = _loop_config["max_iterations"]
     for iteration in range(max_iterations):
@@ -445,7 +450,7 @@ def agent_loop_stream(user_message: str, conversation_history: list, session_dir
                 )
 
         try:
-            resp = call_llm_with_tools(
+            resp = llm_client.call_llm_with_tools(
                 messages=conversation_history,
                 tools=TOOLS,
                 model=MODELS["orchestrator"],

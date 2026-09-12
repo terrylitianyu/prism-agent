@@ -4,7 +4,7 @@
 
 模块划分:
   agent           Agent Loop 内核(LLM 循环、工具并行、上下文压缩)
-  client          LLM 客户端(call_llm / call_llm_with_tools / SkillLLM / MODELS)
+  client          LLM 客户端(LLMClient / SkillLLM / MODELS,调用台账落盘)
   core            常量:WORKDIR / SESSION_DIR / SKILLS_DIR / ADAPTERS_DIR
   data_store      DataStore 抽象 + SQLiteDataStore 实现
   session         BaseSession(对话历史、chat_events、turn_count)

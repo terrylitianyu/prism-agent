@@ -253,7 +253,7 @@ def build_tool_wrapper(
         #     override step, so an LLM-passed param named "llm" cannot replace it;
         #     skipped entirely for handlers that can't accept it)
         if accepts_llm:
-            kwargs["llm"] = SkillLLM(skill_name)
+            kwargs["llm"] = SkillLLM(skill_name, log_subdir=ctx.session_id)
 
         # 5. Call the handler
         try:
